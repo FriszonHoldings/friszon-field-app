@@ -1,4 +1,4 @@
-const APP_VERSION = '0.3.1';
+const APP_VERSION = '0.3.2';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -347,7 +347,7 @@ function setFQuiet(k, v) { S.form[k] = v; saveDraft(); updateMissing(); }
 function toggleWhat(a) { const f = S.form; const i = f.what.indexOf(a); if (i > -1) f.what.splice(i, 1); else { if (a === 'Count only') f.what = []; else f.what = f.what.filter(x => x !== 'Count only'); f.what.push(a); } saveDraft(); renderVisit(true); }
 function setLine(n, k, v) { const f = S.form; const i = openInvoices(f)[n]; if (!i) return; const inv = i.invoice_no; f.lines[inv] = f.lines[inv] || {invoice_no: inv, amount: '', balance_reason: ''}; f.lines[inv][k] = v; saveDraft(); if (k === 'amount') { const el = document.getElementById('rem-' + n); if (el) el.innerHTML = remHtml(i, f.lines[inv], n); } updateMissing(); }
 function remHtml(i, l, n) { const a = Number(l.amount); if (!(a > 0 && a < i.balance - 0.009)) return ''; return `<label class="field">Remaining ${money(i.balance - a)} on this invoice is:</label><select onchange="setLine(${n},'balance_reason',this.value)"><option value="">Choose</option>${BALANCE_REASONS.map(r => `<option ${l.balance_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>`; }
-function addProduct(sku) { if (!sku) return; const f = S.form; if (f.products.indexOf(sku) < 0) { f.products.push(sku); f.add_products.push(sku); } saveDraft(); renderVisit(true); }
+function addProduct(sku, forRefill) { if (!sku) return; const f = S.form; if (f.products.indexOf(sku) < 0) { f.products.push(sku); f.add_products.push(sku); if (forRefill) { f.count[sku] = 0; f.refill[sku] = ''; } } saveDraft(); renderVisit(true); if (forRefill) toast(productName(sku) + ' added – enter the refill quantity'); }
 
 async function takePhoto(field) {
   const input = document.createElement('input');
@@ -393,7 +393,8 @@ function renderVisit(keepScroll) {
     <div id="countcheck">${countCheckHtml(f)}</div></div>`;
   h += `<div class="card"><h2>What happened at this visit?</h2><div class="choices">${ACTIONS.map(a => `<button class="${has(f, a) ? 'on' : ''}" onclick="toggleWhat('${a}')">${a}</button>`).join('')}</div></div>`;
   if (has(f, 'Refilled')) {
-    h += `<div class="card"><h2>Refill – packs added</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('refill', sku, f.refill[sku])}</div>`).join('')}`;
+    h += `<div class="card"><h2>Refill – packs added</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}${f.add_products.indexOf(sku) > -1 ? '<small>New for this shop</small>' : ''}</div>${stepper('refill', sku, f.refill[sku])}</div>`).join('')}
+      ${others.length ? `<label class="field">Refilling a product this shop never had?</label><select onchange="addProduct(this.value, true)"><option value="">+ Add a new product to refill</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(p.name)}${p.pack ? ' (' + esc(p.pack) + ')' : ''}</option>`).join('')}</select>` : ''}`;
     if (!has(f, 'Payment collected') && t.payment_overdue) h += `<div class="err">This shop owes ${money(t.amount_due)} unpaid for 60+ days. Collect first.</div><label class="check"><input type="checkbox" ${f.refill_override ? 'checked' : ''} onchange="setF('refill_override',this.checked)"> My Reporting Manager approved this refill</label>`;
     h += `</div>`;
   }
