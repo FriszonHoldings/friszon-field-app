@@ -1,4 +1,4 @@
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -70,14 +70,19 @@ async function syncNow() {
 async function pullData(showToast) {
   const res = await ffApi({email: S.session.email, pin: S.session.pin, op: 'bootstrap'}, 45000).catch(e => ({ok: false, error: String(e)}));
   if (res && res.ok) {
+    S.authProblem = false;
     res.pulledAt = Date.now();
     S.data = res;
     await ffSet('data', res);
     if (showToast) toast('Updated');
     if (S.view !== 'visit') render();
   } else if (res && res.error === 'auth') {
-    toast('Login expired. Please sign in again.', 5000);
-    await ffSet('session', null); S.session = null; render();
+    const again = await ffApi({email: S.session.email, pin: S.session.pin, op: 'login'}, 45000).catch(() => null);
+    if (again && again.ok === false && again.error === 'auth') {
+      logClient('warn', 'auth rejected twice');
+      S.authProblem = true; renderHeaderStatus();
+      if (showToast) toast('PIN not accepted. Call Ashwin. Your saved visits are safe on this phone.', 6000);
+    }
   } else if (showToast) {
     toast('No connection. Showing saved data.');
   }
@@ -110,8 +115,8 @@ function renderHeaderStatus() {
   const el = document.getElementById('sync-status'); if (!el) return;
   const waiting = S.outbox.filter(x => !x.permanent).length;
   const stuck = S.outbox.filter(x => x.permanent).length;
-  el.className = 'status' + (stuck ? ' err' : waiting ? ' wait' : '');
-  el.textContent = stuck ? stuck + ' need attention' : waiting ? waiting + ' waiting to send' : 'All sent ✓';
+  el.className = 'status' + (stuck || S.authProblem ? ' err' : waiting ? ' wait' : '');
+  el.textContent = S.authProblem ? 'PIN problem – call Ashwin' : stuck ? stuck + ' need attention' : waiting ? waiting + ' waiting to send' : 'All sent ✓';
 }
 
 function render() {

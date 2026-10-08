@@ -1,11 +1,13 @@
-const API_VERSION = '1.2.0';
+const API_VERSION = '1.3.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
 
 function doGet(e) {
-  return handle_(e && e.parameter ? e.parameter : {});
+  const p = e && e.parameter ? e.parameter : {};
+  if (!p.op) return out_({ok: false, error: 'retry', via: 'get'});
+  return handle_(p);
 }
 
 function doPost(e) {
@@ -23,6 +25,7 @@ function handle_(req) {
   PROF_ = []; PROF_T_ = started;
   try {
     if (req.op === 'ping') return out_({ok: true, version: API_VERSION, now: new Date().toISOString()});
+    if (!req.email || !req.pin) return out_({ok: false, error: 'retry', via: 'no_credentials'});
     const rep = auth_(req);
     mark_('auth');
     if (!rep) return out_({ok: false, error: 'auth'});

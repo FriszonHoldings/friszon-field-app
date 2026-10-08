@@ -80,7 +80,7 @@ async function ffSyncOutbox(onProgress) {
         sent++;
       } else {
         item.lastError = (res && (res.error + (res.detail ? ': ' + res.detail : ''))) || 'unknown';
-        item.permanent = !!(res && ['not_your_shop', 'bad_visit', 'bad_pad', 'pad_range', 'pad_overlap', 'auth'].indexOf(res.error) > -1);
+        item.permanent = !!(res && ['not_your_shop', 'bad_visit', 'bad_pad', 'pad_range', 'pad_overlap'].indexOf(res.error) > -1);
         await ffOutboxPut(item);
         failed++;
         if (!item.permanent) break;
