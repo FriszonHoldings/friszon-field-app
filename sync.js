@@ -68,8 +68,8 @@ async function ffSyncOutbox(onProgress) {
         const payload = Object.assign({}, item.payload, {attempts: item.attempts});
         const body = {email: session.email, pin: session.pin, op: item.type};
         body[item.type] = payload;
-        res = await ffApi(body, 90000);
-        if (res && res.error === 'retry') res = await ffApi(body, 90000);
+        res = await ffApi(body, 75000);
+        if (res && res.error === 'retry') res = await ffApi(body, 75000);
       } catch (e) {
         res = {ok: false, error: 'network', detail: String(e && e.message || e)};
       }

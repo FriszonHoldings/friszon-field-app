@@ -1,4 +1,4 @@
-const API_VERSION = '1.3.0';
+const API_VERSION = '1.4.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -65,8 +65,15 @@ function auth_(req) {
   }
   const testLogins = JSON.parse(props.getProperty('TEST_LOGINS') || '{}');
   const target = testLogins[email] ? String(testLogins[email]).trim().toLowerCase() : email;
-  const reps = table_(ss_().getSheetByName('APP_Reps'));
-  const r = reps.rows.find(x => String(x.rep_email).trim().toLowerCase() === target);
+  const repKey = 'rep_' + target;
+  let r = null;
+  const hit = cache.get(repKey);
+  if (hit) r = JSON.parse(hit);
+  else {
+    const reps = table_(ss_().getSheetByName('APP_Reps'));
+    r = reps.rows.find(x => String(x.rep_email).trim().toLowerCase() === target) || null;
+    if (r) cache.put(repKey, JSON.stringify({name: String(r.name || ''), city: String(r.city || '')}), 21600);
+  }
   if (!r) return null;
   if (testLogins[email]) return {email: target, name: 'TEST ' + String(r.name || ''), city: String(r.city || ''), test: true, login: email};
   return {email: target, name: String(r.name || ''), city: String(r.city || '')};
@@ -198,6 +205,15 @@ function folder_(name) {
   return target;
 }
 
+function photoPath_(rep, folderName, recordId, column) {
+  return (rep && rep.test ? 'TEST_' : '') + folderName + '/' + recordId + '.' + column + '.jpg';
+}
+
+function visitPhotos_(rep, v) {
+  if (v.shelf_photo) savePhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', v.shelf_photo, rep);
+  if (v.slip_photo) savePhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', v.slip_photo, rep);
+}
+
 function savePhoto_(folderName, recordId, column, dataUrl, rep) {
   if (!dataUrl) return '';
   if (rep && rep.test) return savePhoto_('TEST_' + folderName, recordId, column, dataUrl);
@@ -217,7 +233,7 @@ function saveVisit_(rep, v) {
   const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
   const ids = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
   mark_('ids');
-  if (ids.indexOf(String(v.visit_id)) > -1) return {ok: true, duplicate: true, visit_id: v.visit_id};
+  if (ids.indexOf(String(v.visit_id)) > -1) { visitPhotos_(rep, v); return {ok: true, duplicate: true, visit_id: v.visit_id}; }
   const shopSh = ss.getSheetByName('APP_Shops');
   const sv = shopSh.getDataRange().getValues();
   const sh0 = sv[0].map(h => String(h).trim());
@@ -225,9 +241,8 @@ function saveVisit_(rep, v) {
   const shopRow = sv.find((r, k) => k > 0 && String(r[si]) === String(v.shop_id));
   if (!shopRow || String(shopRow[ri]).trim().toLowerCase() !== rep.email) return {ok: false, error: 'not_your_shop'};
   mark_('shop');
-  const shelf = savePhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', v.shelf_photo, rep);
-  const slip = savePhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', v.slip_photo, rep);
-  mark_('photos');
+  const shelf = v.shelf_photo ? photoPath_(rep, 'APP_Visits_Images', v.visit_id, 'shelf_photo') : '';
+  const slip = v.slip_photo ? photoPath_(rep, 'APP_Visits_Images', v.visit_id, 'slip_photo') : '';
   const f = v.fields || {};
   const row = head.map(h => {
     if (h === 'visit_id') return v.visit_id;
@@ -278,6 +293,8 @@ function saveVisit_(rep, v) {
   } finally {
     lock.releaseLock();
   }
+  visitPhotos_(rep, v);
+  mark_('photos');
   return {ok: true, visit_id: v.visit_id};
 }
 
