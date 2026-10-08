@@ -38,16 +38,38 @@ async function ffOutboxAll() { return ffTx('outbox', 'readonly', st => ffReq(st.
 async function ffOutboxPut(item) { return ffTx('outbox', 'readwrite', st => ffReq(st.put(item))); }
 async function ffOutboxDelete(id) { return ffTx('outbox', 'readwrite', st => ffReq(st.delete(id))); }
 
-async function ffApi(body, timeoutMs) {
+function ffQuery(params) {
+  return Object.keys(params).filter(k => params[k] !== undefined && params[k] !== null && params[k] !== '').map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k])).join('&');
+}
+
+async function ffApi(body, timeoutMs, id) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs || 60000);
   try {
-    const res = await fetch(FF_API_URL, {method: 'POST', body: JSON.stringify(body), headers: {'Content-Type': 'text/plain;charset=utf-8'}, signal: ctrl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store'});
+    const url = FF_API_URL + '?' + ffQuery({op: body.op, id: id, u: body.u, t: body.t});
+    const res = await fetch(url, {method: 'POST', body: JSON.stringify(body), headers: {'Content-Type': 'text/plain;charset=utf-8'}, signal: ctrl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store'});
     const text = await res.text();
     try { return JSON.parse(text); } catch (e) { return {ok: false, error: 'bad_response', detail: text.slice(0, 200)}; }
   } finally {
     clearTimeout(t);
   }
+}
+
+async function ffGetApi(params, timeoutMs) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs || 60000);
+  try {
+    const url = FF_API_URL + '?' + ffQuery(Object.assign({}, params, {n: Date.now().toString(36)}));
+    const res = await fetch(url, {method: 'GET', signal: ctrl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store'});
+    const text = await res.text();
+    try { return JSON.parse(text); } catch (e) { return {ok: false, error: 'bad_response', detail: text.slice(0, 200)}; }
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function ffCred(session) {
+  return {u: session.u, t: session.t};
 }
 
 let ffSyncing = false;
@@ -58,7 +80,7 @@ async function ffSyncOutbox(onProgress) {
   let sent = 0, failed = 0;
   try {
     const session = await ffGet('session');
-    if (!session) return {sent: 0, failed: 0};
+    if (!session || !session.t) return {sent: 0, failed: 0};
     const items = (await ffOutboxAll()).sort((a, b) => a.created - b.created);
     for (const item of items) {
       item.attempts = (item.attempts || 0) + 1;
@@ -66,10 +88,11 @@ async function ffSyncOutbox(onProgress) {
       let res;
       try {
         const payload = Object.assign({}, item.payload, {attempts: item.attempts});
-        const body = {email: session.email, pin: session.pin, op: item.type};
+        const body = Object.assign({op: item.type}, ffCred(session));
         body[item.type] = payload;
-        res = await ffApi(body, 75000);
-        if (res && res.error === 'retry') res = await ffApi(body, 75000);
+        const id = item.type === 'visit' ? payload.visit_id : item.type === 'pad' ? payload.pad_id : '';
+        res = await ffApi(body, 75000, id);
+        if (res && (res.error === 'retry' || res.error === 'bad_response')) res = await ffApi(body, 75000, id);
       } catch (e) {
         res = {ok: false, error: 'network', detail: String(e && e.message || e)};
       }

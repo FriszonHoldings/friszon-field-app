@@ -1,4 +1,4 @@
-const APP_VERSION = '0.2.1';
+const APP_VERSION = '0.3.0';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -30,7 +30,7 @@ window.addEventListener('unhandledrejection', e => logClient('error', 'promise',
 async function flushClientLog() {
   const q = (await ffGet('clientLog')) || [];
   if (!q.length || !S.session || !navigator.onLine) return;
-  const res = await ffApi({email: S.session.email, pin: S.session.pin, op: 'log', entries: q}).catch(() => null);
+  const res = await ffApi(Object.assign({op: 'log', entries: q}, ffCred(S.session))).catch(() => null);
   if (res && res.ok) await ffSet('clientLog', []);
 }
 
@@ -56,6 +56,7 @@ async function refreshOutbox() { S.outbox = await ffOutboxAll(); S.sentLog = (aw
 
 async function syncNow() {
   if (!S.session) return;
+  if (!S.session.t) await upgradeSession();
   if (S.outbox.length) {
     await ffSyncOutbox(() => refreshOutbox());
     await refreshOutbox();
@@ -67,9 +68,21 @@ async function syncNow() {
   }
 }
 
+let pullTry = 0, pullTimer = null;
 async function pullData(showToast) {
-  const res = await ffApi({email: S.session.email, pin: S.session.pin, op: 'bootstrap'}, 45000).catch(e => ({ok: false, error: String(e)}));
+  if (!S.session) return;
+  if (!S.session.t) { await upgradeSession(); if (!S.session || !S.session.t) return; }
+  clearTimeout(pullTimer);
+  S.loading = true; pullTry++; if (!S.data) render();
+  let res = null;
+  for (let k = 0; k < 3 && !(res && (res.ok || res.error === 'auth')); k++) {
+    res = await ffGetApi(Object.assign({op: 'bootstrap'}, ffCred(S.session)), 45000).catch(e => ({ok: false, error: 'network', detail: String(e)}));
+    if (res && res.ok && !Array.isArray(res.shops)) res = {ok: false, error: 'bad_response', detail: 'no shops in reply'};
+  }
+  S.loading = false;
+  if (!(res && res.ok)) logClient('warn', 'bootstrap failed', (res && (res.error + ' ' + (res.detail || ''))) || '');
   if (res && res.ok) {
+    pullTry = 0;
     S.authProblem = false;
     res.pulledAt = Date.now();
     S.data = res;
@@ -77,15 +90,28 @@ async function pullData(showToast) {
     if (showToast) toast('Updated');
     if (S.view !== 'visit') render();
   } else if (res && res.error === 'auth') {
-    const again = await ffApi({email: S.session.email, pin: S.session.pin, op: 'login'}, 45000).catch(() => null);
-    if (again && again.ok === false && again.error === 'auth') {
-      logClient('warn', 'auth rejected twice');
-      S.authProblem = true; renderHeaderStatus();
-      if (showToast) toast('PIN not accepted. Call Ashwin. Your saved visits are safe on this phone.', 6000);
-    }
-  } else if (showToast) {
-    toast('No connection. Showing saved data.');
+    S.authProblem = true; renderHeaderStatus();
+    logClient('warn', 'token rejected');
+    toast('PIN not accepted. Call Ashwin. Your saved visits are safe on this phone.', 6000);
+  } else {
+    if (showToast) toast('No connection. Showing saved data.');
+    if (!S.data) { render(); pullTimer = setTimeout(() => pullData(false), 15000); }
   }
+}
+
+async function upgradeSession() {
+  if (!S.session || S.session.t || !S.session.pin) return;
+  const res = await loginCall(S.session.email, S.session.pin);
+  if (res && res.ok && res.t) { S.session = {email: S.session.email, name: res.rep.name, u: res.u, t: res.t}; await ffSet('session', S.session); }
+  else if (res && res.error === 'auth') { S.authProblem = true; renderHeaderStatus(); }
+}
+
+async function loginCall(email, pin) {
+  let res = null;
+  for (let k = 0; k < 4 && !(res && (res.ok || res.error === 'auth')); k++) {
+    res = await ffApi({email: email, pin: pin, op: 'login'}, 30000).catch(() => ({ok: false, error: 'network'}));
+  }
+  return res;
 }
 
 function visitedTodaySet() {
@@ -125,11 +151,11 @@ function render() {
   if (S.view === 'pad') return renderPad();
   const tabs = [['due', 'Shops Due'], ['all', 'My Shops'], ['sent', 'Sent']];
   let body = '';
-  if (!S.data) body = '<div class="empty">Loading your shops…<br><br><button class="btn small ghost" onclick="pullData(true)">Retry</button></div>';
+  if (!S.data) body = `<div class="empty">${S.loading ? 'Loading your shops…' + (pullTry > 1 ? ' (try ' + pullTry + ')' : '') : 'Could not load your shops yet. Trying again automatically.'}<br><br><button class="btn small ghost" onclick="pullData(true)">Try now</button></div>`;
   else if (S.view === 'sent') body = renderSent();
   else body = renderList(S.view === 'due');
-  const dueCount = shopRows().filter(r => r.due).length;
-  const allCount = shopRows().length;
+  const dueCount = S.data ? shopRows().filter(r => r.due).length : '…';
+  const allCount = S.data ? shopRows().length : '…';
   $app.innerHTML = `
     <header class="top"${S.data && S.data.test ? ' style="background:#8a5a00"' : ''}><h1>Friszon Field${S.data && S.data.test ? ' · TEST' : ''}</h1><span id="sync-status" class="status"></span><button onclick="menu()">☰</button></header>
     <nav class="tabs">${tabs.map(([k, l]) => `<button class="${S.view === k ? 'on' : ''}" onclick="go('${k}')">${l}${k === 'due' ? ' (' + dueCount + ')' : k === 'all' ? ' (' + allCount + ')' : ''}</button>`).join('')}</nav>
@@ -191,9 +217,9 @@ async function doLogin() {
   const email = document.getElementById('em').value.trim().toLowerCase();
   const pin = document.getElementById('pin').value.trim();
   const btn = document.getElementById('go'); btn.disabled = true; btn.textContent = 'Signing in…';
-  const res = await ffApi({email: email, pin: pin, op: 'login'}, 30000).catch(e => ({ok: false, error: 'network'}));
-  if (res && res.ok) {
-    S.session = {email: email, pin: pin, name: res.rep.name};
+  const res = await loginCall(email, pin);
+  if (res && res.ok && res.t) {
+    S.session = {email: email, name: res.rep.name, u: res.u, t: res.t};
     await ffSet('session', S.session);
     S.view = 'due'; render(); await pullData(false);
   } else {

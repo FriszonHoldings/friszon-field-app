@@ -1,4 +1,4 @@
-const API_VERSION = '1.4.0';
+const API_VERSION = '1.5.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -7,6 +7,7 @@ const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
 function doGet(e) {
   const p = e && e.parameter ? e.parameter : {};
   if (!p.op) return out_({ok: false, error: 'retry', via: 'get'});
+  p.viaGet = true;
   return handle_(p);
 }
 
@@ -25,12 +26,16 @@ function handle_(req) {
   PROF_ = []; PROF_T_ = started;
   try {
     if (req.op === 'ping') return out_({ok: true, version: API_VERSION, now: new Date().toISOString()});
-    if (!req.email || !req.pin) return out_({ok: false, error: 'retry', via: 'no_credentials'});
-    const rep = auth_(req);
+    const hasPin = req.email && req.pin;
+    const hasToken = req.u && req.t;
+    if (!hasPin && !hasToken) return out_({ok: false, error: 'retry', via: 'no_credentials'});
+    const rep = hasPin ? auth_(req) : authToken_(req.u, req.t);
     mark_('auth');
     if (!rep) return out_({ok: false, error: 'auth'});
     let res;
-    if (req.op === 'login') res = {ok: true, rep: rep};
+    if (req.viaGet && ['visit', 'pad'].indexOf(req.op) > -1) res = bounced_(rep, req.op, req.id);
+    else if (req.viaGet && req.op === 'log') res = {ok: true, bounced: true};
+    else if (req.op === 'login') res = Object.assign({ok: true, rep: rep}, hasPin ? tokenFor_(String(req.email).trim().toLowerCase(), String(req.pin).trim()) : {});
     else if (req.op === 'bootstrap') res = bootstrap_(rep);
     else if (req.op === 'visit') res = saveVisit_(rep, req.visit);
     else if (req.op === 'pad') res = savePad_(rep, req.pad);
@@ -49,6 +54,45 @@ function out_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+function secret_() {
+  const props = PropertiesService.getScriptProperties();
+  let s = props.getProperty('TOKEN_SECRET');
+  if (!s) { s = Utilities.getUuid() + Utilities.getUuid(); props.setProperty('TOKEN_SECRET', s); }
+  return s;
+}
+
+function hex_(bytes) {
+  return bytes.map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('');
+}
+
+function uidOf_(email) {
+  return hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'uid:' + email)).slice(0, 12);
+}
+
+function sigOf_(email, pin) {
+  return hex_(Utilities.computeHmacSha256Signature(email + '|' + pin, secret_())).slice(0, 40);
+}
+
+function tokenFor_(email, pin) {
+  return {u: uidOf_(email), t: sigOf_(email, pin)};
+}
+
+function authToken_(u, t) {
+  const pins = JSON.parse(PropertiesService.getScriptProperties().getProperty('PINS') || '{}');
+  const email = Object.keys(pins).find(e => uidOf_(e) === String(u));
+  if (!email || sigOf_(email, String(pins[email])) !== String(t)) return null;
+  return repFor_(email);
+}
+
+function bounced_(rep, op, id) {
+  if (!id) return {ok: false, error: 'retry', via: 'bounce'};
+  const ss = ss_();
+  const sh = sheet_(ss, rep, op === 'visit' ? 'APP_Visits' : 'APP_SlipPads');
+  const col = op === 'visit' ? 1 : sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim()).indexOf('pad_id') + 1;
+  const ids = sh.getLastRow() > 1 && col > 0 ? sh.getRange(2, col, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
+  return ids.indexOf(String(id)) > -1 ? {ok: true, duplicate: true, via: 'bounce'} : {ok: false, error: 'retry', via: 'bounce'};
+}
+
 function auth_(req) {
   const email = String(req.email || '').trim().toLowerCase();
   const pin = String(req.pin || '').trim();
@@ -63,6 +107,12 @@ function auth_(req) {
     cache.put(failKey, String(fails + 1), 900);
     return null;
   }
+  return repFor_(email);
+}
+
+function repFor_(email) {
+  const cache = CacheService.getScriptCache();
+  const props = PropertiesService.getScriptProperties();
   const testLogins = JSON.parse(props.getProperty('TEST_LOGINS') || '{}');
   const target = testLogins[email] ? String(testLogins[email]).trim().toLowerCase() : email;
   const repKey = 'rep_' + target;
