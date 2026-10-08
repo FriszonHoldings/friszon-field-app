@@ -1,4 +1,4 @@
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.3.1';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -75,8 +75,8 @@ async function pullData(showToast) {
   clearTimeout(pullTimer);
   S.loading = true; pullTry++; if (!S.data) render();
   let res = null;
-  for (let k = 0; k < 3 && !(res && (res.ok || res.error === 'auth')); k++) {
-    res = await ffGetApi(Object.assign({op: 'bootstrap'}, ffCred(S.session)), 45000).catch(e => ({ok: false, error: 'network', detail: String(e)}));
+  for (let k = 0; k < 4 && !(res && (res.ok || res.error === 'auth')); k++) {
+    res = await ffGetApi(Object.assign({op: 'bootstrap'}, ffCred(S.session)), 20000).catch(e => ({ok: false, error: 'network', detail: String(e)}));
     if (res && res.ok && !Array.isArray(res.shops)) res = {ok: false, error: 'bad_response', detail: 'no shops in reply'};
   }
   S.loading = false;
@@ -109,7 +109,7 @@ async function upgradeSession() {
 async function loginCall(email, pin) {
   let res = null;
   for (let k = 0; k < 4 && !(res && (res.ok || res.error === 'auth')); k++) {
-    res = await ffApi({email: email, pin: pin, op: 'login'}, 30000).catch(() => ({ok: false, error: 'network'}));
+    res = await ffApi({email: email, pin: pin, op: 'login'}, 20000).catch(() => ({ok: false, error: 'network'}));
   }
   return res;
 }

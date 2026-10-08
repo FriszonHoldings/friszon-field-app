@@ -91,8 +91,9 @@ async function ffSyncOutbox(onProgress) {
         const body = Object.assign({op: item.type}, ffCred(session));
         body[item.type] = payload;
         const id = item.type === 'visit' ? payload.visit_id : item.type === 'pad' ? payload.pad_id : '';
-        res = await ffApi(body, 75000, id);
-        if (res && (res.error === 'retry' || res.error === 'bad_response')) res = await ffApi(body, 75000, id);
+        const once = () => ffApi(body, 40000, id).catch(e => ({ok: false, error: 'network', detail: String(e && e.message || e)}));
+        res = await once();
+        if (res && ['retry', 'bad_response', 'network'].indexOf(res.error) > -1) res = await once();
       } catch (e) {
         res = {ok: false, error: 'network', detail: String(e && e.message || e)};
       }
