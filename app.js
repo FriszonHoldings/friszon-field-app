@@ -1,4 +1,4 @@
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.2.1';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -52,7 +52,7 @@ async function init() {
   setInterval(() => { if (navigator.onLine) syncNow(); }, 60000);
 }
 
-async function refreshOutbox() { S.outbox = await ffOutboxAll(); renderHeaderStatus(); }
+async function refreshOutbox() { S.outbox = await ffOutboxAll(); S.sentLog = (await ffGet('sentLog')) || []; renderHeaderStatus(); if (S.view === 'sent') render(); }
 
 async function syncNow() {
   if (!S.session) return;
@@ -158,7 +158,8 @@ function renderList(dueOnly) {
 function renderListInner(dueOnly) { const tmp = document.createElement('div'); tmp.innerHTML = renderList(dueOnly); return tmp.querySelector('#list').innerHTML; }
 
 function renderSent() {
-  const waiting = S.outbox.map(o => `<div class="outbox-item"><b>${esc(o.label || o.type)}</b><br><span class="small">Saved ${new Date(o.created).toLocaleTimeString('en-IN')} · ${o.permanent ? '<span style="color:var(--red)">Rejected: ' + esc(o.lastError) + '</span>' : 'waiting to send' + (o.attempts ? ' (tried ' + o.attempts + 'x' + (o.lastError ? ': ' + esc(o.lastError) : '') + ')' : '')}</span></div>`).join('');
+  const why = e => /network|fetch|abort/i.test(e || '') ? 'no signal' : /bad_response|retry|server/i.test(e || '') ? 'office server busy' : (e || '');
+  const waiting = S.outbox.map(o => `<div class="outbox-item"><b>${esc(o.label || o.type)}</b><br><span class="small">Saved ${new Date(o.created).toLocaleTimeString('en-IN')} · ${o.permanent ? '<span style="color:var(--red)">Rejected: ' + esc(o.lastError) + ' – call Ashwin</span>' : 'will send automatically' + (o.attempts ? ' (tried ' + o.attempts + 'x, ' + esc(why(o.lastError)) + ')' : '')}</span></div>`).join('');
   const sent = (S.sentLog || []).slice(0, 50).map(s => `<div class="outbox-item">${esc(s.label || s.type)}<br><span class="small">Saved ${new Date(s.saved_at).toLocaleString('en-IN')} · sent ${new Date(s.sent_at).toLocaleTimeString('en-IN')} ✓</span></div>`).join('');
   return `<div class="card"><h2>Waiting to send (${S.outbox.length})</h2>${waiting || '<div class="small">Nothing waiting. Everything has reached the office.</div>'}<br><button class="btn small ghost" onclick="manualSync()">Send now</button></div>
     <div class="card"><h2>Sent from this phone</h2>${sent || '<div class="small">Nothing yet.</div>'}</div>`;
@@ -214,6 +215,7 @@ function stopGeo() { if (S.geoWatch !== null && navigator.geolocation) navigator
 function geoText(err) { return S.geo ? `📍 Location found (±${S.geo.accuracy} m)` : err ? `📍 Location not available: ${esc(err)}. Allow location for this app.` : '📍 Finding location…'; }
 
 function openVisit(shopId) {
+  S.showAllMissing = false;
   const shop = S.data.shops.find(s => s.shop_id === shopId);
   S.form = {
     visit_id: uid(), shop_id: shopId, opened_at: new Date().toISOString(), products: shop.products.slice(), add_products: [],
@@ -350,7 +352,7 @@ function compress(file) {
   });
 }
 
-function updateMissing() { const el = document.getElementById('missing'); if (!el) return; const m = validate(S.form); el.innerHTML = m.length ? 'Still needed: ' + m.map(esc).join(' · ') : ''; document.getElementById('savebtn').textContent = m.length ? 'Save visit (' + m.length + ' to fill)' : 'Save visit'; }
+function updateMissing() { const el = document.getElementById('missing'); if (!el) return; const m = validate(S.form); const shown = S.showAllMissing ? m : m.slice(0, 2); el.innerHTML = m.length ? 'Still needed: ' + shown.map(esc).join(' · ') + (m.length > shown.length ? ` <u onclick="S.showAllMissing=true;updateMissing()">+${m.length - shown.length} more</u>` : '') : ''; document.getElementById('savebtn').textContent = m.length ? 'Save visit (' + m.length + ' to fill)' : 'Save visit'; }
 
 function renderVisit(keepScroll) {
   const y = window.scrollY;
