@@ -1,4 +1,4 @@
-const FF_API_URL = 'REPLACE_WITH_API_URL';
+const FF_API_URL = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
 const FF_DB = 'friszon-field';
 const FF_DB_VERSION = 1;
 
