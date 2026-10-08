@@ -1,4 +1,4 @@
-const API_VERSION = '1.1.0';
+const API_VERSION = '1.2.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -14,11 +14,17 @@ function doPost(e) {
   return handle_(body);
 }
 
+let PROF_ = [];
+let PROF_T_ = 0;
+function mark_(label) { const n = Date.now(); PROF_.push(label + ':' + (n - PROF_T_)); PROF_T_ = n; }
+
 function handle_(req) {
   const started = Date.now();
+  PROF_ = []; PROF_T_ = started;
   try {
     if (req.op === 'ping') return out_({ok: true, version: API_VERSION, now: new Date().toISOString()});
     const rep = auth_(req);
+    mark_('auth');
     if (!rep) return out_({ok: false, error: 'auth'});
     let res;
     if (req.op === 'login') res = {ok: true, rep: rep};
@@ -28,6 +34,7 @@ function handle_(req) {
     else if (req.op === 'log') res = saveLog_(rep, req.entries || []);
     else res = {ok: false, error: 'unknown_op'};
     res.ms = Date.now() - started;
+    res.prof = PROF_.join(' ');
     return out_(res);
   } catch (err) {
     try { serverError_(req, err); } catch (e2) {}
@@ -193,19 +200,11 @@ function savePhoto_(folderName, recordId, column, dataUrl, rep) {
   if (rep && rep.test) return savePhoto_('TEST_' + folderName, recordId, column, dataUrl);
   const m = String(dataUrl).match(/^data:(image\/[a-z]+);base64,(.+)$/);
   if (!m) throw new Error('bad photo for ' + column);
-  const stamp = Utilities.formatDate(new Date(), 'UTC', 'HHmmss');
-  const name = recordId + '.' + column + '.' + stamp + '.jpg';
+  const name = recordId + '.' + column + '.jpg';
   const folder = folder_(folderName);
   const existing = folder.getFilesByName(name);
   if (!existing.hasNext()) folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[2]), m[1], name));
   return folderName + '/' + name;
-}
-
-function existingPhoto_(folderName, recordId, column, rep) {
-  if (rep && rep.test) folderName = 'TEST_' + folderName;
-  const folder = folder_(folderName);
-  const it = folder.searchFiles("title contains '" + recordId + '.' + column + ".'");
-  return it.hasNext() ? folderName + '/' + it.next().getName() : '';
 }
 
 function saveVisit_(rep, v) {
@@ -214,12 +213,18 @@ function saveVisit_(rep, v) {
   const sh = sheet_(ss, rep, 'APP_Visits');
   const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
   const ids = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
+  mark_('ids');
   if (ids.indexOf(String(v.visit_id)) > -1) return {ok: true, duplicate: true, visit_id: v.visit_id};
-  const shops = table_(ss.getSheetByName('APP_Shops')).rows;
-  const shop = shops.find(s => String(s.shop_id) === String(v.shop_id));
-  if (!shop || String(shop.rep_email).trim().toLowerCase() !== rep.email) return {ok: false, error: 'not_your_shop'};
-  const shelf = existingPhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', rep) || savePhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', v.shelf_photo, rep);
-  const slip = existingPhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', rep) || savePhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', v.slip_photo, rep);
+  const shopSh = ss.getSheetByName('APP_Shops');
+  const sv = shopSh.getDataRange().getValues();
+  const sh0 = sv[0].map(h => String(h).trim());
+  const si = sh0.indexOf('shop_id'), ri = sh0.indexOf('rep_email');
+  const shopRow = sv.find((r, k) => k > 0 && String(r[si]) === String(v.shop_id));
+  if (!shopRow || String(shopRow[ri]).trim().toLowerCase() !== rep.email) return {ok: false, error: 'not_your_shop'};
+  mark_('shop');
+  const shelf = savePhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', v.shelf_photo, rep);
+  const slip = savePhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', v.slip_photo, rep);
+  mark_('photos');
   const f = v.fields || {};
   const row = head.map(h => {
     if (h === 'visit_id') return v.visit_id;
@@ -239,6 +244,7 @@ function saveVisit_(rep, v) {
   });
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
+  mark_('lock');
   try {
     const again = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
     if (again.indexOf(String(v.visit_id)) > -1) return {ok: true, duplicate: true, visit_id: v.visit_id};
@@ -263,7 +269,9 @@ function saveVisit_(rep, v) {
         cell.setValue(cur.join(' , '));
       }
     }
+    mark_('write');
     syncLog_(ss, rep, v);
+    mark_('log');
   } finally {
     lock.releaseLock();
   }

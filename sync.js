@@ -42,7 +42,7 @@ async function ffApi(body, timeoutMs) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs || 60000);
   try {
-    const res = await fetch(FF_API_URL, {method: 'POST', body: JSON.stringify(body), headers: {'Content-Type': 'text/plain;charset=utf-8'}, signal: ctrl.signal, redirect: 'follow'});
+    const res = await fetch(FF_API_URL, {method: 'POST', body: JSON.stringify(body), headers: {'Content-Type': 'text/plain;charset=utf-8'}, signal: ctrl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store'});
     const text = await res.text();
     try { return JSON.parse(text); } catch (e) { return {ok: false, error: 'bad_response', detail: text.slice(0, 200)}; }
   } finally {
