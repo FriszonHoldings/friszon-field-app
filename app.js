@@ -126,7 +126,7 @@ function render() {
   const dueCount = shopRows().filter(r => r.due).length;
   const allCount = shopRows().length;
   $app.innerHTML = `
-    <header class="top"><h1>Friszon Field</h1><span id="sync-status" class="status"></span><button onclick="menu()">☰</button></header>
+    <header class="top"${S.data && S.data.test ? ' style="background:#8a5a00"' : ''}><h1>Friszon Field${S.data && S.data.test ? ' · TEST' : ''}</h1><span id="sync-status" class="status"></span><button onclick="menu()">☰</button></header>
     <nav class="tabs">${tabs.map(([k, l]) => `<button class="${S.view === k ? 'on' : ''}" onclick="go('${k}')">${l}${k === 'due' ? ' (' + dueCount + ')' : k === 'all' ? ' (' + allCount + ')' : ''}</button>`).join('')}</nav>
     <main>${body}</main>`;
   renderHeaderStatus();
@@ -353,7 +353,7 @@ function renderVisit(keepScroll) {
   const others = (S.data.products || []).filter(p => f.products.indexOf(p.sku) < 0);
   const flags = (t.flag || '').split('|').map(x => x.trim()).filter(Boolean).map(x => `<span class="chip ${/Collect|overdue/i.test(x) ? 'red' : 'amber'}">${esc(x)}</span>`).join('');
   const inv = has(f, 'Payment collected') ? openInvoices(f) : [];
-  let h = `<header class="top"><button onclick="cancelVisit()">←</button><h1>${esc(shop.shop_name)}</h1><span id="sync-status" class="status"></span></header><main>`;
+  let h = `<header class="top"${S.data.test ? ' style="background:#8a5a00"' : ''}><button onclick="cancelVisit()">←</button><h1>${esc(shop.shop_name)}</h1><span id="sync-status" class="status"></span></header><main>`;
   h += `<div class="card"><div class="small">${esc(shop.shop_id)}${t.amount_due ? ' · amount due ' + money(t.amount_due) : ''}</div><div class="small">${esc(t.refill_plan || '')}</div>${flags}<div class="small" id="geo" style="margin-top:8px">${geoText()}</div></div>`;
   h += `<div class="card"><h2>Packs on the shelf now</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('count', sku, f.count[sku])}</div>`).join('')}
     ${others.length ? `<label class="field">Shop now keeps another product?</label><select onchange="addProduct(this.value)"><option value="">+ Add a product</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(p.name)}${p.pack ? ' (' + esc(p.pack) + ')' : ''}</option>`).join('')}</select>` : ''}

@@ -1,4 +1,4 @@
-const API_VERSION = '1.0.0';
+const API_VERSION = '1.1.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -47,15 +47,38 @@ function auth_(req) {
   const failKey = 'fail_' + email;
   const fails = Number(cache.get(failKey) || 0);
   if (fails >= 8) return null;
-  const pins = JSON.parse(PropertiesService.getScriptProperties().getProperty('PINS') || '{}');
+  const props = PropertiesService.getScriptProperties();
+  const pins = JSON.parse(props.getProperty('PINS') || '{}');
   if (!pins[email] || String(pins[email]) !== pin) {
     cache.put(failKey, String(fails + 1), 900);
     return null;
   }
+  const testLogins = JSON.parse(props.getProperty('TEST_LOGINS') || '{}');
+  const target = testLogins[email] ? String(testLogins[email]).trim().toLowerCase() : email;
   const reps = table_(ss_().getSheetByName('APP_Reps'));
-  const r = reps.rows.find(x => String(x.rep_email).trim().toLowerCase() === email);
+  const r = reps.rows.find(x => String(x.rep_email).trim().toLowerCase() === target);
   if (!r) return null;
-  return {email: email, name: String(r.name || ''), city: String(r.city || '')};
+  if (testLogins[email]) return {email: target, name: 'TEST ' + String(r.name || ''), city: String(r.city || ''), test: true, login: email};
+  return {email: target, name: String(r.name || ''), city: String(r.city || '')};
+}
+
+function sheet_(ss, rep, name) {
+  if (!rep.test) return ss.getSheetByName(name);
+  const tname = 'TEST_' + name;
+  let sh = ss.getSheetByName(tname);
+  if (!sh) {
+    const src = ss.getSheetByName(name);
+    sh = ss.insertSheet(tname);
+    if (src) sh.getRange(1, 1, 1, src.getLastColumn()).setValues(src.getRange(1, 1, 1, src.getLastColumn()).getValues());
+  }
+  return sh;
+}
+
+function rowsBoth_(ss, rep, name) {
+  const rows = table_(ss.getSheetByName(name)).rows;
+  if (!rep.test) return rows;
+  const t = ss.getSheetByName('TEST_' + name);
+  return t && t.getLastRow() > 1 ? rows.concat(table_(t).rows) : rows;
 }
 
 function ss_() {
@@ -107,7 +130,7 @@ function bootstrap_(rep) {
   const invoices = table_(ss.getSheetByName('APP_Invoices')).rows
     .filter(i => myShopIds[String(i.shop_id)] && ['Open', 'Awaiting approval'].indexOf(String(i.status)) > -1)
     .map(i => ({invoice_no: String(i.invoice_no), shop_id: String(i.shop_id), inv_date: iso_(i.inv_date), balance: Number(i.balance) || 0, label: String(i.label || i.invoice_no)}));
-  const visitsT = table_(ss.getSheetByName('APP_Visits'));
+  const visitsT = {rows: rowsBoth_(ss, rep, 'APP_Visits')};
   const lastByShop = {};
   const usedSlips = [];
   const usedRefs = [];
@@ -132,7 +155,7 @@ function bootstrap_(rep) {
     });
     last[sid] = {visit_time: iso_(v.visit_time), after: after};
   });
-  const pads = table_(ss.getSheetByName('APP_SlipPads')).rows
+  const pads = rowsBoth_(ss, rep, 'APP_SlipPads')
     .filter(p => String(p.rep_email).trim().toLowerCase() === me)
     .map(p => ({pad_id: String(p.pad_id), first_no: Number(p.first_no), last_no: Number(p.last_no)}));
   const todayKey = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
@@ -140,7 +163,7 @@ function bootstrap_(rep) {
     .filter(v => String(v.rep_email).trim().toLowerCase() === me && v.visit_time instanceof Date && Utilities.formatDate(v.visit_time, TZ, 'yyyy-MM-dd') === todayKey)
     .map(v => ({visit_id: String(v.visit_id), shop_id: String(v.shop_id), visit_time: iso_(v.visit_time)}));
   return {
-    ok: true, version: API_VERSION, now: new Date().toISOString(), rep: rep, shops: shops, today: today,
+    ok: true, version: API_VERSION, now: new Date().toISOString(), rep: rep, test: !!rep.test, shops: shops, today: today,
     products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday
   };
 }
@@ -165,8 +188,9 @@ function folder_(name) {
   return target;
 }
 
-function savePhoto_(folderName, recordId, column, dataUrl) {
+function savePhoto_(folderName, recordId, column, dataUrl, rep) {
   if (!dataUrl) return '';
+  if (rep && rep.test) return savePhoto_('TEST_' + folderName, recordId, column, dataUrl);
   const m = String(dataUrl).match(/^data:(image\/[a-z]+);base64,(.+)$/);
   if (!m) throw new Error('bad photo for ' + column);
   const stamp = Utilities.formatDate(new Date(), 'UTC', 'HHmmss');
@@ -177,7 +201,8 @@ function savePhoto_(folderName, recordId, column, dataUrl) {
   return folderName + '/' + name;
 }
 
-function existingPhoto_(folderName, recordId, column) {
+function existingPhoto_(folderName, recordId, column, rep) {
+  if (rep && rep.test) folderName = 'TEST_' + folderName;
   const folder = folder_(folderName);
   const it = folder.searchFiles("title contains '" + recordId + '.' + column + ".'");
   return it.hasNext() ? folderName + '/' + it.next().getName() : '';
@@ -186,15 +211,15 @@ function existingPhoto_(folderName, recordId, column) {
 function saveVisit_(rep, v) {
   if (!v || !v.visit_id || !v.shop_id) return {ok: false, error: 'bad_visit'};
   const ss = ss_();
-  const sh = ss.getSheetByName('APP_Visits');
+  const sh = sheet_(ss, rep, 'APP_Visits');
   const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
   const ids = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
   if (ids.indexOf(String(v.visit_id)) > -1) return {ok: true, duplicate: true, visit_id: v.visit_id};
   const shops = table_(ss.getSheetByName('APP_Shops')).rows;
   const shop = shops.find(s => String(s.shop_id) === String(v.shop_id));
   if (!shop || String(shop.rep_email).trim().toLowerCase() !== rep.email) return {ok: false, error: 'not_your_shop'};
-  const shelf = existingPhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo') || savePhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', v.shelf_photo);
-  const slip = existingPhoto_('APP_Visits_Images', v.visit_id, 'slip_photo') || savePhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', v.slip_photo);
+  const shelf = existingPhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', rep) || savePhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', v.shelf_photo, rep);
+  const slip = existingPhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', rep) || savePhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', v.slip_photo, rep);
   const f = v.fields || {};
   const row = head.map(h => {
     if (h === 'visit_id') return v.visit_id;
@@ -218,13 +243,13 @@ function saveVisit_(rep, v) {
     const again = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
     if (again.indexOf(String(v.visit_id)) > -1) return {ok: true, duplicate: true, visit_id: v.visit_id};
     sh.appendRow(row);
-    const pl = ss.getSheetByName('APP_PaymentLines');
+    const pl = sheet_(ss, rep, 'APP_PaymentLines');
     const plHead = pl.getRange(1, 1, 1, pl.getLastColumn()).getValues()[0].map(h => String(h).trim());
     (v.lines || []).forEach((l, i) => {
       const o = {line_id: v.visit_id + '-' + (i + 1), visit_id: v.visit_id, invoice_no: l.invoice_no, amount: Number(l.amount), rep_email: rep.email, created_at: new Date(v.saved_at || v.visit_time), balance_reason: l.balance_reason || ''};
       pl.appendRow(plHead.map(h => Object.prototype.hasOwnProperty.call(o, h) ? o[h] : ''));
     });
-    if (v.add_products && v.add_products.length) {
+    if (v.add_products && v.add_products.length && !rep.test) {
       const ssh = ss.getSheetByName('APP_Shops');
       const sHead = ssh.getRange(1, 1, 1, ssh.getLastColumn()).getValues()[0].map(h => String(h).trim());
       const idCol = sHead.indexOf('shop_id');
@@ -246,9 +271,10 @@ function saveVisit_(rep, v) {
 }
 
 function syncLog_(ss, rep, v) {
-  let sh = ss.getSheetByName('APP_SyncLog');
+  const name = rep.test ? 'TEST_SyncLog' : 'APP_SyncLog';
+  let sh = ss.getSheetByName(name);
   if (!sh) {
-    sh = ss.insertSheet('APP_SyncLog');
+    sh = ss.insertSheet(name);
     sh.appendRow(['visit_id', 'rep_email', 'shop_id', 'opened_at', 'saved_at', 'received_at', 'delay_sec', 'gps_accuracy_m', 'app_version', 'attempts']);
   }
   const saved = v.saved_at ? new Date(v.saved_at) : null;
@@ -261,12 +287,12 @@ function savePad_(rep, p) {
   const first = Number(p.first_no), last = Number(p.last_no);
   if (!(last > first)) return {ok: false, error: 'pad_range'};
   const ss = ss_();
-  const sh = ss.getSheetByName('APP_SlipPads');
+  const sh = sheet_(ss, rep, 'APP_SlipPads');
   const t = table_(sh);
   if (t.rows.some(r => String(r.pad_id) === String(p.pad_id))) return {ok: true, duplicate: true};
   const clash = t.rows.find(r => String(r.rep_email).trim().toLowerCase() === rep.email && Number(r.first_no) <= last && Number(r.last_no) >= first);
   if (clash) return {ok: false, error: 'pad_overlap'};
-  const photo = savePhoto_('APP_SlipPads_Images', p.pad_id, 'first_slip_photo', p.photo);
+  const photo = savePhoto_('APP_SlipPads_Images', p.pad_id, 'first_slip_photo', p.photo, rep);
   const o = {pad_id: p.pad_id, rep_email: rep.email, first_no: first, last_no: last, first_slip_photo: photo, received_time: new Date(p.saved_at || Date.now())};
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
@@ -288,6 +314,14 @@ function serverError_(req, err) {
   let sh = ss.getSheetByName('APP_ClientLog');
   if (!sh) { sh = ss.insertSheet('APP_ClientLog'); sh.appendRow(['received_at', 'rep_email', 'at', 'level', 'message', 'detail']); }
   sh.appendRow([new Date(), String(req.email || ''), 'server', 'error', String(req.op || ''), String(err && err.stack || err).slice(0, 2000)]);
+}
+
+function setTestLogin(login, repEmail, pin) {
+  const props = PropertiesService.getScriptProperties();
+  const t = JSON.parse(props.getProperty('TEST_LOGINS') || '{}');
+  t[String(login).trim().toLowerCase()] = String(repEmail).trim().toLowerCase();
+  props.setProperty('TEST_LOGINS', JSON.stringify(t));
+  setPin(login, pin);
 }
 
 function setPin(email, pin) {
