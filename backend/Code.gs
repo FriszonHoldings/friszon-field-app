@@ -1,3 +1,24 @@
+function zzCompareBootstrap() {
+  ['bujji.prabhu@gmail.com', 'elafisheee24@gmail.com'].forEach(login => {
+    const rep = repFor_(login);
+    const strip = o => { const c = JSON.parse(JSON.stringify(o)); delete c.now; return c; };
+    const runs = [];
+    for (let k = 0; k < 2; k++) {
+      FORCE_OLD_ = true; let t0 = Date.now(); const a = strip(bootstrap_(rep)); const ta = Date.now() - t0;
+      FORCE_OLD_ = false; t0 = Date.now(); const b = strip(bootstrap_(rep)); const tb = Date.now() - t0;
+      runs.push('old ' + ta + 'ms new ' + tb + 'ms');
+      if (k === 1) {
+        const diffs = [];
+        Object.keys(Object.assign({}, a, b)).forEach(key => {
+          const x = JSON.stringify(a[key]), y = JSON.stringify(b[key]);
+          if (x !== y) { let i = 0; while (i < x.length && x[i] === y[i]) i++; diffs.push(key + ' @' + i + ' OLD ' + String(x).slice(Math.max(0, i - 80), i + 80) + ' NEW ' + String(y).slice(Math.max(0, i - 80), i + 80)); }
+        });
+        Logger.log(login + ' | ' + runs.join(' ; ') + ' | identical: ' + (diffs.length === 0) + (diffs.length ? ' | ' + diffs.join(' || ') : ''));
+      }
+    }
+  });
+}
+
 const API_VERSION = '1.9.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
@@ -220,7 +241,10 @@ function tableFrom_(values, offMs) {
   return {head: head, rows: rows};
 }
 
+let FORCE_OLD_ = false;
+
 function bulk_(names) {
+  if (FORCE_OLD_) { const ss = ss_(); const out = {}; names.forEach(n => { const sh = ss.getSheetByName(n); if (sh) out[n] = table_(sh); }); return out; }
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const meta = sheetMeta_(attempt > 0);
