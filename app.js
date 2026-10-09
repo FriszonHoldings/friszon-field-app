@@ -1,4 +1,4 @@
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -8,6 +8,7 @@ const NOT_COLLECTED = ['Owner not there', 'Owner refused', 'Owner asked for time
 const ISSUES = ['None', 'Damage', 'Near expiry', 'Dispute', 'Shop closing', 'Competitor offer', 'Other'];
 const BALANCE_REASONS = ['To be collected later', 'Stock returned', 'Stock expired'];
 
+const LIST_VIEWS = ['due', 'all', 'sent', 'menu', 'stock', 'prospects'];
 const S = {session: null, data: null, view: 'due', search: '', form: null, outbox: [], toast: '', geo: null, geoWatch: null};
 const $app = document.getElementById('app');
 
@@ -96,7 +97,7 @@ async function pullData(showToast) {
     S.data = res;
     await ffSet('data', res);
     if (showToast) toast('Updated');
-    if (S.view !== 'visit') render();
+    if (LIST_VIEWS.indexOf(S.view) > -1) render();
   } else if (res && res.error === 'auth') {
     S.authProblem = true; renderHeaderStatus();
     logClient('warn', 'token rejected');
@@ -160,6 +161,11 @@ function render() {
   if (S.view === 'menu') return renderMenu();
   if (S.view === 'dayclose') return renderDayClose();
   if (S.view === 'deposit' && S.dep) return renderDeposit();
+  if (S.view === 'stock') return renderStock();
+  if (S.view === 'receipt' && S.rc) return renderReceipt();
+  if (S.view === 'monthclose' && S.mc) return renderMonthClose();
+  if (S.view === 'prospects') return renderProspects();
+  if (S.view === 'prospect' && S.pr) return renderProspect();
   const tabs = [['due', 'Shops Due'], ['all', 'My Shops'], ['sent', 'Sent']];
   let body = '';
   if (!S.data) body = `<div class="empty">${S.loading ? 'Loading your shops…' + (pullTry > 1 ? ' (try ' + pullTry + ')' : '') : 'Could not load your shops yet. Trying again automatically.'}<br><br><button class="btn small ghost" onclick="pullData(true)">Try now</button></div>`;
@@ -216,6 +222,9 @@ function renderMenu() {
   $app.innerHTML = topBar('Menu') + `<main>
     <button class="shop" onclick="openDayClose()"><div class="name">Day Close</div><div class="meta">${dc ? 'Done for today ✓' : 'Not done yet today – do it before 7 pm'}</div></button>
     <button class="shop" onclick="openDeposit()"><div class="name">Bank Deposit</div><div class="meta">${n ? n + ' cash/cheque collection' + (n > 1 ? 's' : '') + ' not yet deposited' : 'Nothing waiting to be deposited'}</div></button>
+    <button class="shop" onclick="openStock()"><div class="name">Stock Received</div><div class="meta">${stockMenuText()}</div></button>
+    <button class="shop" onclick="openMonthClose()"><div class="name">Month Close</div><div class="meta">${monthCloseMenuText()}</div></button>
+    <button class="shop" onclick="openProspects()"><div class="name">New shops (Prospects)</div><div class="meta">${prospectMenuText()}</div></button>
     <button class="shop" onclick="S.view='pad';S.pad={pad_id:'P'+uid(),first_no:'',last_no:'',photo:''};render()"><div class="name">Add a slip pad</div><div class="meta">When you get a new pad of slips</div></button>
     <button class="shop" onclick="go('due');pullData(true)"><div class="name">Refresh shops</div><div class="meta">${S.data && S.data.pulledAt ? 'Last updated ' + new Date(S.data.pulledAt).toLocaleString('en-IN') : ''}</div></button>
     <button class="shop" onclick="signOut()"><div class="name">Sign out</div><div class="meta">Only when nothing is waiting to send</div></button>

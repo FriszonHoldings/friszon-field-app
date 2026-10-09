@@ -1,4 +1,4 @@
-const API_VERSION = '1.7.0';
+const API_VERSION = '1.8.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -42,6 +42,9 @@ function handle_(req) {
     else if (req.op === 'log') res = saveLog_(rep, req.entries || []);
     else if (req.op === 'dayclose') res = saveDayClose_(rep, req.dayclose);
     else if (req.op === 'deposit') res = saveDeposit_(rep, req.deposit);
+    else if (req.op === 'receipt') res = saveReceipt_(rep, req.receipt);
+    else if (req.op === 'monthclose') res = saveMonthClose_(rep, req.monthclose);
+    else if (req.op === 'prospect') res = saveProspect_(rep, req.prospect);
     else res = {ok: false, error: 'unknown_op'};
     res.ms = Date.now() - started;
     res.prof = PROF_.join(' ');
@@ -86,10 +89,18 @@ function authToken_(u, t) {
   return repFor_(email);
 }
 
-const ID_COLS_ = {visit: ['APP_Visits', 'visit_id'], pad: ['APP_SlipPads', 'pad_id'], dayclose: ['APP_DayClose', 'dayclose_id'], deposit: ['APP_Deposits', 'deposit_id']};
+const ID_COLS_ = {visit: ['APP_Visits', 'visit_id'], pad: ['APP_SlipPads', 'pad_id'], dayclose: ['APP_DayClose', 'dayclose_id'], deposit: ['APP_Deposits', 'deposit_id'], receipt: ['APP_StockReceived', 'receipt_id'], monthclose: ['APP_MonthClose', 'monthclose_id'], prospect: ['APP_Prospects', 'prospect_id']};
+const PROSPECT_STAGE_COL_ = {f1: 'prospect_id', f2: 'q10_footfall', f3: 'q11_terms'};
 
 function bounced_(rep, op, id) {
   if (!id || !ID_COLS_[op]) return {ok: false, error: 'retry', via: 'bounce'};
+  if (op === 'prospect') {
+    const parts = String(id).split('.');
+    const sh = sheet_(ss_(), rep, 'APP_Prospects');
+    const row = table_(sh).rows.find(r => String(r.prospect_id) === parts[0]);
+    const col = PROSPECT_STAGE_COL_[parts[1] || 'f1'];
+    return row && col && String(row[col] === null || row[col] === undefined ? '' : row[col]) !== '' ? {ok: true, duplicate: true, via: 'bounce'} : {ok: false, error: 'retry', via: 'bounce'};
+  }
   const ss = ss_();
   const sh = sheet_(ss, rep, ID_COLS_[op][0]);
   const col = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim()).indexOf(ID_COLS_[op][1]) + 1;
@@ -247,10 +258,275 @@ function bootstrap_(rep) {
   const visitedToday = visitsT.rows
     .filter(v => String(v.rep_email).trim().toLowerCase() === me && v.visit_time instanceof Date && Utilities.formatDate(v.visit_time, TZ, 'yyyy-MM-dd') === todayKey)
     .map(v => ({visit_id: String(v.visit_id), shop_id: String(v.shop_id), visit_time: iso_(v.visit_time), pay_mode: String(v.pay_mode || ''), amount: Number(v.amount) || 0, paid: String(v.what_happened).indexOf('Payment collected') > -1}));
+  mark_('core');
+  const received = {};
+  rowsBoth_(ss, rep, 'APP_StockReceived').forEach(r => { if (String(r.rep_email).trim().toLowerCase() === me) received[String(r.dispatch_id)] = true; });
+  const dispBy = {};
+  const dSh = ss.getSheetByName('APP_Dispatches');
+  if (dSh) table_(dSh).rows.forEach(d => {
+    const id = String(d.dispatch_id || '').trim();
+    if (!id || received[id] || String(d.rep_email).trim().toLowerCase() !== me || !(Number(d.qty_sent) > 0)) return;
+    const x = dispBy[id] = dispBy[id] || {dispatch_id: id, dispatch_date: d.dispatch_date instanceof Date ? Utilities.formatDate(d.dispatch_date, TZ, 'yyyy-MM-dd') : String(d.dispatch_date || ''), lines: []};
+    x.lines.push({sku: String(d.sku).trim().toUpperCase(), qty: Number(d.qty_sent)});
+  });
+  const mc = monthCloseWindow_(rep);
+  const mcDone = rowsBoth_(ss, rep, 'APP_MonthClose').some(r => String(r.rep_email).trim().toLowerCase() === me && monthKeyOf_(r.month) === mc.month);
+  const pSh = ss.getSheetByName(rep.test ? 'TEST_APP_Prospects' : 'APP_Prospects');
+  const prospects = pSh && pSh.getLastRow() > 1 ? table_(pSh).rows.filter(p => String(p.rep_email).trim().toLowerCase() === me && p.prospect_id).map(p => ({
+    prospect_id: String(p.prospect_id), shop_name: String(p.shop_name || ''), pincode: String(p.pincode || ''), created_at: iso_(p.created_at),
+    q8_community: String(p.q8_community || ''), q9_shop_type: String(p.q9_shop_type || ''),
+    has_f2: String(p.q10_footfall === null || p.q10_footfall === undefined ? '' : p.q10_footfall) !== '', has_f3: String(p.q11_terms || '') !== '',
+    score: p.score === '' ? '' : Number(p.score), result: String(p.result || ''), score_detail: String(p.score_detail || ''),
+    decision: String(p.decision || ''), decision_note: String(p.decision_note || ''), shop_id: String(p.shop_id || ''), stop: f1Stop_(p)
+  })) : [];
   return {
     ok: true, version: API_VERSION, now: new Date().toISOString(), rep: rep, test: !!rep.test, shops: shops, today: today,
-    products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday, depositable: depositable, dayClosed: dayCloses.indexOf(todayKey) > -1, todayDate: todayKey
+    products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday, depositable: depositable, dayClosed: dayCloses.indexOf(todayKey) > -1, todayDate: todayKey,
+    dispatches: Object.keys(dispBy).map(k => dispBy[k]), monthClose: {month: mc.month, label: mc.label, open: mc.open, done: mcDone, opens: mc.opens}, prospects: prospects
   };
+}
+
+function monthKeyOf_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, TZ, 'yyyy-MM');
+  const s = String(v || '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})/);
+  return m ? m[1] + '-' + m[2] : s;
+}
+
+function monthCloseWindow_(rep, at) {
+  const now = at ? new Date(at) : new Date();
+  const y = Number(Utilities.formatDate(now, TZ, 'yyyy')), mo = Number(Utilities.formatDate(now, TZ, 'M')), dom = Number(Utilities.formatDate(now, TZ, 'd'));
+  const last = new Date(Date.UTC(y, mo - 2, 15));
+  const month = Utilities.formatDate(last, 'UTC', 'yyyy-MM');
+  const label = Utilities.formatDate(last, 'UTC', 'MMMM yyyy');
+  const next = new Date(Date.UTC(y, mo, 1));
+  return {month: month, label: label, open: dom <= 5 || !!(rep && rep.test), opens: Utilities.formatDate(next, 'UTC', '1 MMMM')};
+}
+
+function ensureCols_(sh, names) {
+  const head = headOf_(sh);
+  const missing = names.filter(n => head.indexOf(n) < 0);
+  if (missing.length) sh.getRange(1, head.length + 1, 1, missing.length).setValues([missing]);
+  return missing.length ? headOf_(sh) : head;
+}
+
+function activeSkus_(ss) {
+  return table_(ss.getSheetByName('APP_Products')).rows.filter(p => String(p.active).toUpperCase().indexOf('Y') === 0 || p.active === true).map(p => String(p.sku).trim().toUpperCase());
+}
+
+function nonNegInt_(v) {
+  return v !== '' && v !== null && v !== undefined && /^\d+$/.test(String(v));
+}
+
+function saveReceipt_(rep, r) {
+  if (!r || !r.receipt_id || !r.dispatch_id || r.confirm !== true || typeof r.all_ok !== 'boolean') return {ok: false, error: 'bad_receipt', detail: 'missing fields'};
+  const ss = ss_();
+  const sh = sheet_(ss, rep, 'APP_StockReceived');
+  if (idsIn_(sh, 'receipt_id').indexOf(String(r.receipt_id)) > -1) { receiptPhotos_(rep, r); return {ok: true, duplicate: true}; }
+  const lines = table_(ss.getSheetByName('APP_Dispatches')).rows.filter(d => String(d.dispatch_id).trim() === String(r.dispatch_id) && Number(d.qty_sent) > 0);
+  if (!lines.length) return {ok: false, error: 'bad_receipt', detail: 'dispatch ' + r.dispatch_id + ' not found'};
+  if (lines.some(d => String(d.rep_email).trim().toLowerCase() !== rep.email)) return {ok: false, error: 'bad_receipt', detail: 'dispatch ' + r.dispatch_id + ' is not yours'};
+  if (rowsBoth_(ss, rep, 'APP_StockReceived').some(x => String(x.dispatch_id) === String(r.dispatch_id) && String(x.rep_email).trim().toLowerCase() === rep.email)) return {ok: false, error: 'receipt_exists', detail: 'dispatch ' + r.dispatch_id + ' already received'};
+  if (!r.boxes_photo) return {ok: false, error: 'bad_receipt', detail: 'boxes photo missing'};
+  const o = {receipt_id: r.receipt_id, dispatch_id: r.dispatch_id, rep_email: rep.email, received_time: new Date(r.saved_at || Date.now()), all_ok: r.all_ok, confirm: true,
+    boxes_photo: photoPath_(rep, 'APP_StockReceived_Images', r.receipt_id, 'boxes_photo'), damage_photo: r.damage_photo ? photoPath_(rep, 'APP_StockReceived_Images', r.receipt_id, 'damage_photo') : ''};
+  const cols = [];
+  for (const d of lines) {
+    const s = String(d.sku).trim().toUpperCase();
+    cols.push('recv_' + s, 'dmg_' + s);
+    if (r.all_ok) { o['recv_' + s] = (o['recv_' + s] || 0) + Number(d.qty_sent); o['dmg_' + s] = 0; continue; }
+    const rv = (r.recv || {})[s], dm = (r.dmg || {})[s];
+    if (!nonNegInt_(rv) || !nonNegInt_(dm)) return {ok: false, error: 'bad_receipt', detail: 'received and damaged needed for ' + s};
+    if (Number(dm) > Number(rv)) return {ok: false, error: 'bad_receipt', detail: 'damaged more than received for ' + s};
+    o['recv_' + s] = Number(rv); o['dmg_' + s] = Number(dm);
+  }
+  if (!r.all_ok && !r.damage_photo) return {ok: false, error: 'bad_receipt', detail: 'photo of the problem missing'};
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    if (idsIn_(sh, 'receipt_id').indexOf(String(r.receipt_id)) > -1) return {ok: true, duplicate: true};
+    const head = ensureCols_(sh, cols);
+    sh.appendRow(rowFor_(head, o));
+  } finally {
+    lock.releaseLock();
+  }
+  receiptPhotos_(rep, r);
+  return {ok: true, receipt_id: r.receipt_id};
+}
+
+function receiptPhotos_(rep, r) {
+  if (r.boxes_photo) savePhoto_('APP_StockReceived_Images', r.receipt_id, 'boxes_photo', r.boxes_photo, rep);
+  if (r.damage_photo) savePhoto_('APP_StockReceived_Images', r.receipt_id, 'damage_photo', r.damage_photo, rep);
+}
+
+function saveMonthClose_(rep, m) {
+  if (!m || !m.monthclose_id || !m.month || m.confirm !== true) return {ok: false, error: 'bad_monthclose', detail: 'missing fields'};
+  const ss = ss_();
+  const sh = sheet_(ss, rep, 'APP_MonthClose');
+  if (idsIn_(sh, 'monthclose_id').indexOf(String(m.monthclose_id)) > -1) return {ok: true, duplicate: true};
+  const w = monthCloseWindow_(rep, m.saved_at);
+  if (!w.open) return {ok: false, error: 'bad_monthclose', detail: 'Month Close is only open from the 1st to the 5th'};
+  if (String(m.month) !== w.month) return {ok: false, error: 'bad_monthclose', detail: 'month must be ' + w.month};
+  if (['Agree', 'Disagree'].indexOf(m.verdict) < 0) return {ok: false, error: 'bad_monthclose', detail: 'verdict missing'};
+  if (m.verdict === 'Disagree' && String(m.what_is_wrong || '').trim().length < 5) return {ok: false, error: 'bad_monthclose', detail: 'say what is wrong'};
+  const skus = activeSkus_(ss);
+  const o = {monthclose_id: m.monthclose_id, rep_email: rep.email, month: new Date(w.month + '-01T12:00:00+05:30'), verdict: m.verdict, what_is_wrong: m.verdict === 'Disagree' ? String(m.what_is_wrong).trim() : '', counted_at: new Date(m.saved_at || Date.now())};
+  for (const s of skus) {
+    const v = (m.stock || {})[s];
+    if (!nonNegInt_(v)) return {ok: false, error: 'bad_monthclose', detail: 'count missing for ' + s};
+    o['stock_' + s] = Number(v);
+  }
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    if (idsIn_(sh, 'monthclose_id').indexOf(String(m.monthclose_id)) > -1) return {ok: true, duplicate: true};
+    if (table_(sh).rows.some(r => String(r.rep_email).trim().toLowerCase() === rep.email && monthKeyOf_(r.month) === w.month)) return {ok: false, error: 'monthclose_exists', detail: 'Month Close for ' + w.label + ' already submitted'};
+    const head = ensureCols_(sh, skus.map(s => 'stock_' + s));
+    sh.appendRow(rowFor_(head, o));
+  } finally {
+    lock.releaseLock();
+  }
+  return {ok: true, monthclose_id: m.monthclose_id};
+}
+
+const PROSPECT_OPTS_ = {
+  q1_premium_section: ['Yes', 'No'],
+  q2_premium_products: ['0 or 1', '2', '3 or 4', '5 or more'],
+  q3_crowded_shelf: ['Yes', 'No'],
+  q4_storage: ['No problem', 'Sunlight heat damp or pests'],
+  q5_shopper_match: ['Both', 'South Indian only', 'Gourmet only', 'Neither'],
+  q6_fresh_items: ['Yes', 'No'],
+  q7_catchment: ['All 3 good signs', 'Families + 1 more good sign', 'Mostly PG or hostels', 'Families, but no other good sign', 'Mostly offices or poor housing'],
+  q8_community: ['South Indian', 'Cosmopolitan', 'Mixed', 'PG or hostel belt'],
+  q9_shop_type: ['Supermarket', 'Organic or health store', 'Mid-market with premium section', 'Premium kirana', 'Gated-community store'],
+  q11_terms: ['Yes', 'No'],
+  q12_checks: ['Yes', 'No'],
+  q13_shelf: ['Eye or hand level, all facing front', 'Lower shelf, but all visible', 'Bottom shelf only'],
+  q14_owner: ['Keen, yes to all 3', 'Keen, but said no to one', 'Not interested'],
+  q15_reliability: ['All good', 'Some doubts', 'Red flags'],
+  q16_linked_to_rep: ['No', 'Yes'],
+  q17_opening_order: ['Standard 20 packs', 'Smaller order requested']
+};
+const F1_Q_ = ['q1_premium_section', 'q2_premium_products', 'q3_crowded_shelf', 'q4_storage', 'q5_shopper_match', 'q6_fresh_items', 'q7_catchment', 'q8_community', 'q9_shop_type'];
+const F3_Q_ = ['q11_terms', 'q12_checks', 'q13_shelf', 'q14_owner', 'q15_reliability', 'q16_linked_to_rep', 'q17_opening_order'];
+const PROSPECT_EXTRA_COLS_ = ['q10_start_at', 'q10_end_at', 'q10_start_photo', 'q10_end_photo', 'q12_licence_photo', 'q12_stamp_photo'];
+
+function f1Stop_(a) {
+  return a.q1_premium_section === 'No' || a.q2_premium_products === '0 or 1' || a.q4_storage === 'Sunlight heat damp or pests';
+}
+
+function f3Stop_(a) {
+  return a.q11_terms === 'No' || a.q12_checks === 'No' || a.q13_shelf === 'Bottom shelf only';
+}
+
+function checkAnswers_(a, keys, stopFn) {
+  for (const k of keys) {
+    const v = a[k];
+    if (v === undefined || v === '') { if (stopFn(a)) continue; return 'answer ' + k.split('_')[0].toUpperCase(); }
+    if (PROSPECT_OPTS_[k].indexOf(v) < 0) return 'bad answer for ' + k;
+  }
+  return '';
+}
+
+function q10WindowOk_(startIso, endIso) {
+  const s = new Date(startIso), e = new Date(endIso);
+  if (isNaN(s) || isNaN(e)) return 'start and end time missing';
+  if (e - s < 15 * 60000 - 5000) return 'count must run for 15 minutes';
+  if (e - s > 60 * 60000) return 'count took over an hour - start again';
+  const dow = Number(Utilities.formatDate(s, TZ, 'u'));
+  const mins = Number(Utilities.formatDate(s, TZ, 'H')) * 60 + Number(Utilities.formatDate(s, TZ, 'm'));
+  if (dow === 7) return 'count on a working day (Monday to Saturday)';
+  if (mins < 18 * 60 || mins > 19 * 60 + 45) return 'count must start between 6:00 and 7:45 pm';
+  return '';
+}
+
+function saveProspect_(rep, p) {
+  if (!p || !p.prospect_id || ['f1', 'f2', 'f3'].indexOf(p.stage) < 0) return {ok: false, error: 'bad_prospect', detail: 'missing id or stage'};
+  const ss = ss_();
+  const sh = sheet_(ss, rep, 'APP_Prospects');
+  const head0 = ensureCols_(sh, PROSPECT_EXTRA_COLS_);
+  const a = p.answers || {};
+  const photoCol = (col) => photoPath_(rep, 'APP_Prospects_Images', p.prospect_id, col);
+  if (p.stage === 'f1') {
+    if (idsIn_(sh, 'prospect_id').indexOf(String(p.prospect_id)) > -1) { prospectPhotos_(rep, p); return {ok: true, duplicate: true}; }
+    if (String(p.shop_name || '').trim().length < 3) return {ok: false, error: 'bad_prospect', detail: 'shop name'};
+    if (String(p.owner_name || '').trim().length < 2) return {ok: false, error: 'bad_prospect', detail: 'owner name'};
+    if (!/^[6-9]\d{9}$/.test(String(p.owner_mobile || ''))) return {ok: false, error: 'bad_prospect', detail: 'owner mobile must be 10 digits'};
+    if (String(p.address || '').trim().length < 5) return {ok: false, error: 'bad_prospect', detail: 'address'};
+    if (!/^\d{6}$/.test(String(p.pincode || ''))) return {ok: false, error: 'bad_prospect', detail: 'pincode must be 6 digits'};
+    if (p.gstin && !/^[0-9A-Z]{15}$/.test(String(p.gstin))) return {ok: false, error: 'bad_prospect', detail: 'GST number must be 15 characters'};
+    if (!p.gps || /^0\.0+, 0\.0+$/.test(p.gps)) return {ok: false, error: 'bad_prospect', detail: 'location missing'};
+    if (!p.front_photo) return {ok: false, error: 'bad_prospect', detail: 'shop front photo missing'};
+    const err = checkAnswers_(a, F1_Q_, f1Stop_);
+    if (err) return {ok: false, error: 'bad_prospect', detail: err};
+    if (!f1Stop_(a) && !p.q2_photo) return {ok: false, error: 'bad_prospect', detail: 'premium products photo missing'};
+    const o = {prospect_id: p.prospect_id, rep_email: rep.email, created_at: new Date(p.saved_at || Date.now()), gps: p.gps, shop_name: String(p.shop_name).trim(), owner_name: String(p.owner_name).trim(),
+      owner_mobile: String(p.owner_mobile), address: String(p.address).trim(), pincode: String(p.pincode), gstin: String(p.gstin || ''), front_photo: photoCol('front_photo'), q2_photo: p.q2_photo ? photoCol('q2_photo') : ''};
+    F1_Q_.forEach(k => { o[k] = a[k] || ''; });
+    const lock = LockService.getScriptLock();
+    lock.waitLock(25000);
+    try {
+      if (idsIn_(sh, 'prospect_id').indexOf(String(p.prospect_id)) > -1) return {ok: true, duplicate: true};
+      const row = rowFor_(head0, o);
+      const pc = head0.indexOf('pincode'), mc = head0.indexOf('owner_mobile');
+      sh.appendRow(row);
+      const r = sh.getLastRow();
+      if (pc > -1) sh.getRange(r, pc + 1).setNumberFormat('@').setValue(String(p.pincode));
+      if (mc > -1) sh.getRange(r, mc + 1).setNumberFormat('@').setValue(String(p.owner_mobile));
+    } finally {
+      lock.releaseLock();
+    }
+    prospectPhotos_(rep, p);
+    return {ok: true, prospect_id: p.prospect_id};
+  }
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    const v = sh.getDataRange().getValues();
+    const head = v[0].map(h => String(h).trim());
+    const ci = k => head.indexOf(k);
+    const r = v.findIndex((row, k) => k > 0 && String(row[ci('prospect_id')]) === String(p.prospect_id));
+    if (r < 1) return {ok: false, error: 'retry', detail: 'prospect ' + p.prospect_id + ' not received yet'};
+    const row = v[r];
+    const cur = {};
+    head.forEach((h, k) => { cur[h] = row[k] instanceof Date ? row[k] : String(row[k] === null || row[k] === undefined ? '' : row[k]); });
+    if (String(cur.rep_email).trim().toLowerCase() !== rep.email) return {ok: false, error: 'bad_prospect', detail: 'not your prospect'};
+    if (f1Stop_(cur)) return {ok: false, error: 'bad_prospect', detail: 'this shop was rejected in Form 1'};
+    const set = {};
+    if (p.stage === 'f2') {
+      if (cur.q10_footfall !== '') return {ok: true, duplicate: true};
+      if (!nonNegInt_(p.q10_footfall) || Number(p.q10_footfall) > 500) return {ok: false, error: 'bad_prospect', detail: 'footfall count'};
+      const werr = rep.test ? '' : q10WindowOk_(p.q10_start_at, p.q10_end_at);
+      if (werr) return {ok: false, error: 'bad_prospect', detail: werr};
+      if (!p.q10_start_photo || !p.q10_end_photo) return {ok: false, error: 'bad_prospect', detail: 'start and end photos'};
+      Object.assign(set, {q10_footfall: Number(p.q10_footfall), q10_start_at: new Date(p.q10_start_at), q10_end_at: new Date(p.q10_end_at), q10_start_photo: photoCol('q10_start_photo'), q10_end_photo: photoCol('q10_end_photo')});
+    } else {
+      if (cur.q11_terms !== '') return {ok: true, duplicate: true};
+      if (!rep.test && String(cur.result).indexOf('GO - meet the owner') < 0) return {ok: false, error: 'bad_prospect', detail: 'owner questions open only after GO'};
+      const err = checkAnswers_(a, F3_Q_, f3Stop_);
+      if (err) return {ok: false, error: 'bad_prospect', detail: err};
+      if (a.q12_checks === 'Yes' && (!p.q12_licence_photo || !p.q12_stamp_photo)) return {ok: false, error: 'bad_prospect', detail: 'licence and stamp photos'};
+      const skus = activeSkus_(ss);
+      const prods = (p.products || []).map(s => String(s).toUpperCase()).filter((s, i, arr) => skus.indexOf(s) > -1 && arr.indexOf(s) === i);
+      if (!f3Stop_(a)) {
+        if (a.q17_opening_order === 'Standard 20 packs' && prods.length !== 5) return {ok: false, error: 'bad_prospect', detail: 'choose exactly 5 products'};
+        if (!prods.length || prods.length > 5) return {ok: false, error: 'bad_prospect', detail: 'choose 1 to 5 products'};
+      }
+      F3_Q_.forEach(k => { set[k] = a[k] || ''; });
+      set.products = prods.join(' , ');
+      if (p.q12_licence_photo) set.q12_licence_photo = photoCol('q12_licence_photo');
+      if (p.q12_stamp_photo) set.q12_stamp_photo = photoCol('q12_stamp_photo');
+    }
+    Object.keys(set).forEach(k => { const c = ci(k); if (c > -1) sh.getRange(r + 1, c + 1).setValue(set[k]); });
+  } finally {
+    lock.releaseLock();
+  }
+  prospectPhotos_(rep, p);
+  return {ok: true, prospect_id: p.prospect_id, stage: p.stage};
+}
+
+function prospectPhotos_(rep, p) {
+  ['front_photo', 'q2_photo', 'q10_start_photo', 'q10_end_photo', 'q12_licence_photo', 'q12_stamp_photo'].forEach(c => { if (p[c]) savePhoto_('APP_Prospects_Images', p.prospect_id, c, p[c], rep); });
 }
 
 function folder_(name) {
