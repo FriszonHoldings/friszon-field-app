@@ -90,7 +90,7 @@ async function ffSyncOutbox(onProgress) {
         const payload = Object.assign({}, item.payload, {attempts: item.attempts});
         const body = Object.assign({op: item.type}, ffCred(session));
         body[item.type] = payload;
-        const id = item.type === 'visit' ? payload.visit_id : item.type === 'pad' ? payload.pad_id : '';
+        const id = payload.visit_id || payload.pad_id || payload.dayclose_id || payload.deposit_id || '';
         const once = () => ffApi(body, 40000, id).catch(e => ({ok: false, error: 'network', detail: String(e && e.message || e)}));
         res = await once();
         if (res && ['retry', 'bad_response', 'network'].indexOf(res.error) > -1) res = await once();
@@ -100,12 +100,15 @@ async function ffSyncOutbox(onProgress) {
       if (res && res.ok) {
         await ffOutboxDelete(item.id);
         const sentLog = (await ffGet('sentLog')) || [];
-        sentLog.unshift({id: item.id, type: item.type, shop_id: item.payload.shop_id || '', label: item.label || '', saved_at: item.created, sent_at: Date.now()});
+        const pl = item.payload || {}, fl = pl.fields || {};
+        sentLog.unshift({id: item.id, type: item.type, shop_id: pl.shop_id || '', label: item.label || '', saved_at: item.created, sent_at: Date.now(),
+          visit_time: pl.visit_time || '', pay_mode: fl.pay_mode || '', amount: fl.amount || 0, paid: (fl.what_happened || []).indexOf('Payment collected') > -1, cheque_date: fl.cheque_date || '', slip_no: fl.slip_no || '',
+          collections: pl.collections || [], close_date: pl.close_date || ''});
         await ffSet('sentLog', sentLog.slice(0, 200));
         sent++;
       } else {
         item.lastError = (res && (res.error + (res.detail ? ': ' + res.detail : ''))) || 'unknown';
-        item.permanent = !!(res && ['not_your_shop', 'bad_visit', 'bad_pad', 'pad_range', 'pad_overlap'].indexOf(res.error) > -1);
+        item.permanent = !!(res && ['not_your_shop', 'bad_visit', 'bad_pad', 'pad_range', 'pad_overlap', 'bad_dayclose', 'dayclose_exists', 'bad_deposit'].indexOf(res.error) > -1);
         await ffOutboxPut(item);
         failed++;
         if (!item.permanent) break;

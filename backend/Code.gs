@@ -1,4 +1,4 @@
-const API_VERSION = '1.6.0';
+const API_VERSION = '1.7.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -33,13 +33,15 @@ function handle_(req) {
     mark_('auth');
     if (!rep) return out_({ok: false, error: 'auth'});
     let res;
-    if (req.viaGet && ['visit', 'pad'].indexOf(req.op) > -1) res = bounced_(rep, req.op, req.id);
+    if (req.viaGet && ID_COLS_[req.op]) res = bounced_(rep, req.op, req.id);
     else if (req.viaGet && req.op === 'log') res = {ok: true, bounced: true};
     else if (req.op === 'login') res = Object.assign({ok: true, rep: rep}, hasPin ? tokenFor_(String(req.email).trim().toLowerCase(), String(req.pin).trim()) : {});
     else if (req.op === 'bootstrap') res = bootstrap_(rep);
     else if (req.op === 'visit') res = saveVisit_(rep, req.visit);
     else if (req.op === 'pad') res = savePad_(rep, req.pad);
     else if (req.op === 'log') res = saveLog_(rep, req.entries || []);
+    else if (req.op === 'dayclose') res = saveDayClose_(rep, req.dayclose);
+    else if (req.op === 'deposit') res = saveDeposit_(rep, req.deposit);
     else res = {ok: false, error: 'unknown_op'};
     res.ms = Date.now() - started;
     res.prof = PROF_.join(' ');
@@ -84,11 +86,13 @@ function authToken_(u, t) {
   return repFor_(email);
 }
 
+const ID_COLS_ = {visit: ['APP_Visits', 'visit_id'], pad: ['APP_SlipPads', 'pad_id'], dayclose: ['APP_DayClose', 'dayclose_id'], deposit: ['APP_Deposits', 'deposit_id']};
+
 function bounced_(rep, op, id) {
-  if (!id) return {ok: false, error: 'retry', via: 'bounce'};
+  if (!id || !ID_COLS_[op]) return {ok: false, error: 'retry', via: 'bounce'};
   const ss = ss_();
-  const sh = sheet_(ss, rep, op === 'visit' ? 'APP_Visits' : 'APP_SlipPads');
-  const col = op === 'visit' ? 1 : sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim()).indexOf('pad_id') + 1;
+  const sh = sheet_(ss, rep, ID_COLS_[op][0]);
+  const col = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim()).indexOf(ID_COLS_[op][1]) + 1;
   const ids = sh.getLastRow() > 1 && col > 0 ? sh.getRange(2, col, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
   return ids.indexOf(String(id)) > -1 ? {ok: true, duplicate: true, via: 'bounce'} : {ok: false, error: 'retry', via: 'bounce'};
 }
@@ -230,12 +234,22 @@ function bootstrap_(rep) {
     .filter(p => String(p.rep_email).trim().toLowerCase() === me)
     .map(p => ({pad_id: String(p.pad_id), first_no: Number(p.first_no), last_no: Number(p.last_no)}));
   const todayKey = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  const deposited = {};
+  rowsBoth_(ss, rep, 'APP_Deposits').forEach(d => list_(d.collections).forEach(id => { deposited[id] = true; }));
+  const shopName = {};
+  shops.forEach(s => { shopName[s.shop_id] = s.shop_name; });
+  const depositable = visitsT.rows
+    .filter(v => String(v.rep_email).trim().toLowerCase() === me && ['Cash', 'Cheque'].indexOf(String(v.pay_mode)) > -1 && String(v.what_happened).indexOf('Payment collected') > -1 && Number(v.amount) > 0 && !String(v.deposit_id || '').trim() && !deposited[String(v.visit_id)])
+    .map(v => ({visit_id: String(v.visit_id), shop_id: String(v.shop_id), shop_name: shopName[String(v.shop_id)] || String(v.shop_id), visit_time: iso_(v.visit_time), pay_mode: String(v.pay_mode), amount: Number(v.amount), slip_no: String(v.slip_no || ''), cheque_no: String(v.cheque_no || ''), cheque_date: v.cheque_date instanceof Date ? Utilities.formatDate(v.cheque_date, TZ, 'yyyy-MM-dd') : ''}));
+  const dayCloses = rowsBoth_(ss, rep, 'APP_DayClose')
+    .filter(d => String(d.rep_email).trim().toLowerCase() === me && d.close_date instanceof Date)
+    .map(d => Utilities.formatDate(d.close_date, TZ, 'yyyy-MM-dd'));
   const visitedToday = visitsT.rows
     .filter(v => String(v.rep_email).trim().toLowerCase() === me && v.visit_time instanceof Date && Utilities.formatDate(v.visit_time, TZ, 'yyyy-MM-dd') === todayKey)
-    .map(v => ({visit_id: String(v.visit_id), shop_id: String(v.shop_id), visit_time: iso_(v.visit_time)}));
+    .map(v => ({visit_id: String(v.visit_id), shop_id: String(v.shop_id), visit_time: iso_(v.visit_time), pay_mode: String(v.pay_mode || ''), amount: Number(v.amount) || 0, paid: String(v.what_happened).indexOf('Payment collected') > -1}));
   return {
     ok: true, version: API_VERSION, now: new Date().toISOString(), rep: rep, test: !!rep.test, shops: shops, today: today,
-    products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday
+    products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday, depositable: depositable, dayClosed: dayCloses.indexOf(todayKey) > -1, todayDate: todayKey
   };
 }
 
@@ -350,6 +364,105 @@ function saveVisit_(rep, v) {
   visitPhotos_(rep, v);
   mark_('photos');
   return {ok: true, visit_id: v.visit_id};
+}
+
+function rowFor_(head, o) {
+  return head.map(h => Object.prototype.hasOwnProperty.call(o, h) && o[h] !== undefined && o[h] !== null ? o[h] : '');
+}
+
+function headOf_(sh) {
+  return sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
+}
+
+function idsIn_(sh, colName) {
+  const head = headOf_(sh);
+  const c = head.indexOf(colName) + 1;
+  return c > 0 && sh.getLastRow() > 1 ? sh.getRange(2, c, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
+}
+
+function saveDayClose_(rep, d) {
+  if (!d || !d.dayclose_id || !d.close_date || d.confirm !== true) return {ok: false, error: 'bad_dayclose'};
+  const ss = ss_();
+  const sh = sheet_(ss, rep, 'APP_DayClose');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    if (idsIn_(sh, 'dayclose_id').indexOf(String(d.dayclose_id)) > -1) return {ok: true, duplicate: true};
+    const already = table_(sh).rows.some(r => String(r.rep_email).trim().toLowerCase() === rep.email && r.close_date instanceof Date && Utilities.formatDate(r.close_date, TZ, 'yyyy-MM-dd') === d.close_date);
+    if (already) return {ok: false, error: 'dayclose_exists', detail: 'Day Close already submitted for ' + d.close_date};
+    const visits = rowsBoth_(ss, rep, 'APP_Visits').filter(v => String(v.rep_email).trim().toLowerCase() === rep.email && v.visit_time instanceof Date && Utilities.formatDate(v.visit_time, TZ, 'yyyy-MM-dd') === d.close_date && String(v.what_happened).indexOf('Payment collected') > -1);
+    const cash = visits.filter(v => String(v.pay_mode) === 'Cash').reduce((a, v) => a + (Number(v.amount) || 0), 0);
+    const cheques = visits.filter(v => String(v.pay_mode) === 'Cheque').length;
+    const o = {dayclose_id: d.dayclose_id, rep_email: rep.email, close_date: new Date(d.close_date + 'T00:00:00+05:30'), cash_collected_calc: Math.round(cash * 100) / 100, cheques_handed: cheques, deposited_all: cash === 0, note: d.note || '', confirm: true, saved_at: d.saved_at ? new Date(d.saved_at) : new Date()};
+    sh.appendRow(rowFor_(headOf_(sh), o));
+    return {ok: true, cash: o.cash_collected_calc, cheques: cheques};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function saveDeposit_(rep, d) {
+  if (!d || !d.deposit_id || ['Cash', 'Cheque'].indexOf(d.deposit_type) < 0) return {ok: false, error: 'bad_deposit', detail: 'missing id or type'};
+  const ss = ss_();
+  const depSh = sheet_(ss, rep, 'APP_Deposits');
+  if (idsIn_(depSh, 'deposit_id').indexOf(String(d.deposit_id)) > -1) { depositPhoto_(rep, d); return {ok: true, duplicate: true}; }
+  const visits = {};
+  rowsBoth_(ss, rep, 'APP_Visits').forEach(v => { visits[String(v.visit_id)] = v; });
+  const deposited = {};
+  table_(depSh).rows.forEach(x => list_(x.collections).forEach(id => { deposited[id] = true; }));
+  const today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  const cols = (d.collections || []).map(String);
+  let total = 0;
+  for (const id of cols) {
+    const v = visits[id];
+    if (!v) return {ok: false, error: 'retry', detail: 'collection ' + id + ' not received yet'};
+    if (String(v.rep_email).trim().toLowerCase() !== rep.email) return {ok: false, error: 'bad_deposit', detail: 'collection ' + id + ' is not yours'};
+    if (String(v.pay_mode) !== d.deposit_type) return {ok: false, error: 'bad_deposit', detail: 'collection ' + id + ' is ' + v.pay_mode};
+    if (deposited[id] || String(v.deposit_id || '').trim()) return {ok: false, error: 'bad_deposit', detail: 'collection ' + id + ' is already in a deposit'};
+    if (v.cheque_date instanceof Date && Utilities.formatDate(v.cheque_date, TZ, 'yyyy-MM-dd') > today) return {ok: false, error: 'bad_deposit', detail: 'cheque ' + id + ' is post-dated'};
+    total += Number(v.amount) || 0;
+  }
+  const myShops = {};
+  table_(ss.getSheetByName('APP_Shops')).rows.forEach(s => { if (String(s.rep_email).trim().toLowerCase() === rep.email) myShops[String(s.shop_id)] = true; });
+  const invs = {};
+  table_(ss.getSheetByName('APP_Invoices')).rows.forEach(i => { invs[String(i.invoice_no)] = i; });
+  const lines = d.lines || [];
+  for (const l of lines) {
+    if (!myShops[String(l.shop_id)]) return {ok: false, error: 'bad_deposit', detail: 'shop ' + l.shop_id + ' is not yours'};
+    const amt = Number(l.amount) || 0;
+    const sp = (l.splits || []).reduce((a, x) => a + (Number(x.amount) || 0), 0);
+    if (!(amt > 0) || Math.abs(sp - amt) > 0.01) return {ok: false, error: 'bad_deposit', detail: 'older payment for ' + l.shop_id + ' does not match its split'};
+    for (const x of l.splits || []) {
+      const iv = invs[String(x.invoice_no)];
+      if (!iv || String(iv.shop_id) !== String(l.shop_id)) return {ok: false, error: 'bad_deposit', detail: 'invoice ' + x.invoice_no + ' is not for ' + l.shop_id};
+    }
+    total += amt;
+  }
+  if (!(Number(d.slip_amount) > 0) || Math.abs(Number(d.slip_amount) - total) > 0.01) return {ok: false, error: 'bad_deposit', detail: 'slip amount ' + d.slip_amount + ' does not equal ' + Math.round(total * 100) / 100};
+  if (!String(d.bank_branch || '').trim()) return {ok: false, error: 'bad_deposit', detail: 'bank branch missing'};
+  const photoPath = d.slip_photo ? photoPath_(rep, 'APP_Deposits_Images', d.deposit_id, 'slip_photo') : '';
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    if (idsIn_(depSh, 'deposit_id').indexOf(String(d.deposit_id)) > -1) return {ok: true, duplicate: true};
+    const created = d.saved_at ? new Date(d.saved_at) : new Date();
+    depSh.appendRow(rowFor_(headOf_(depSh), {deposit_id: d.deposit_id, rep_email: rep.email, created_at: created, deposit_type: d.deposit_type, collections: cols.join(' , '), slip_amount: Number(d.slip_amount), bank_branch: String(d.bank_branch).trim(), deposit_ref: String(d.deposit_ref || '').trim(), slip_photo: photoPath, note: d.note || ''}));
+    const lSh = sheet_(ss, rep, 'DEP_Lines'), sSh = sheet_(ss, rep, 'DEP_Splits');
+    const lHead = headOf_(lSh), sHead = headOf_(sSh);
+    lines.forEach((l, k) => {
+      const lineId = d.deposit_id + '-L' + (k + 1);
+      lSh.appendRow(rowFor_(lHead, {line_id: lineId, deposit_id: d.deposit_id, shop_id: l.shop_id, amount: Number(l.amount), cheque_no: d.deposit_type === 'Cheque' ? String(l.cheque_no || '') : '', cheque_date: d.deposit_type === 'Cheque' && l.cheque_date ? new Date(l.cheque_date + 'T00:00:00+05:30') : '', rep_email: rep.email, created_at: created}));
+      (l.splits || []).forEach((x, j) => sSh.appendRow(rowFor_(sHead, {split_id: lineId + '-S' + (j + 1), line_id: lineId, invoice_no: x.invoice_no, amount: Number(x.amount), balance_reason: x.balance_reason || '', rep_email: rep.email, created_at: created})));
+    });
+  } finally {
+    lock.releaseLock();
+  }
+  depositPhoto_(rep, d);
+  return {ok: true, deposit_id: d.deposit_id};
+}
+
+function depositPhoto_(rep, d) {
+  if (d.slip_photo) savePhoto_('APP_Deposits_Images', d.deposit_id, 'slip_photo', d.slip_photo, rep);
 }
 
 function syncLog_(ss, rep, v) {
