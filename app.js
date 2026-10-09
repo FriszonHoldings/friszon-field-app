@@ -1,4 +1,4 @@
-const APP_VERSION = '0.3.3';
+const APP_VERSION = '0.5.1';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -8,6 +8,7 @@ const NOT_COLLECTED = ['Owner not there', 'Owner refused', 'Owner asked for time
 const ISSUES = ['None', 'Damage', 'Near expiry', 'Dispute', 'Shop closing', 'Competitor offer', 'Other'];
 const BALANCE_REASONS = ['To be collected later', 'Stock returned', 'Stock expired'];
 
+const LIST_VIEWS = ['due', 'all', 'sent', 'menu', 'stock', 'prospects'];
 const S = {session: null, data: null, view: 'due', search: '', form: null, outbox: [], toast: '', geo: null, geoWatch: null};
 const $app = document.getElementById('app');
 
@@ -96,7 +97,7 @@ async function pullData(showToast) {
     S.data = res;
     await ffSet('data', res);
     if (showToast) toast('Updated');
-    if (S.view !== 'visit') render();
+    if (LIST_VIEWS.indexOf(S.view) > -1) render();
   } else if (res && res.error === 'auth') {
     S.authProblem = true; renderHeaderStatus();
     logClient('warn', 'token rejected');
@@ -157,6 +158,14 @@ function render() {
   if (!S.session) return renderLogin();
   if (S.view === 'visit' && S.form) return renderVisit();
   if (S.view === 'pad') return renderPad();
+  if (S.view === 'menu') return renderMenu();
+  if (S.view === 'dayclose') return renderDayClose();
+  if (S.view === 'deposit' && S.dep) return renderDeposit();
+  if (S.view === 'stock') return renderStock();
+  if (S.view === 'receipt' && S.rc) return renderReceipt();
+  if (S.view === 'monthclose' && S.mc) return renderMonthClose();
+  if (S.view === 'prospects') return renderProspects();
+  if (S.view === 'prospect' && S.pr) return renderProspect();
   const tabs = [['due', 'Shops Due'], ['all', 'My Shops'], ['sent', 'Sent']];
   let body = '';
   if (!S.data) body = `<div class="empty">${S.loading ? 'Loading your shops…' + (pullTry > 1 ? ' (try ' + pullTry + ')' : '') : 'Could not load your shops yet. Trying again automatically.'}<br><br><button class="btn small ghost" onclick="pullData(true)">Try now</button></div>`;
@@ -201,15 +210,222 @@ function renderSent() {
 
 async function manualSync() { toast('Sending…'); await syncNow(); S.sentLog = (await ffGet('sentLog')) || []; render(); toast(S.outbox.length ? S.outbox.length + ' still waiting' : 'All sent ✓'); }
 
-function menu() {
-  const choice = prompt('Type a number:\n1 = Refresh shops\n2 = Add a slip pad\n3 = Sign out', '1');
-  if (choice === '1') pullData(true);
-  else if (choice === '2') { S.view = 'pad'; S.pad = {pad_id: 'P' + uid(), first_no: '', last_no: '', photo: ''}; render(); }
-  else if (choice === '3') signOut();
+function menu() { S.view = 'menu'; render(); window.scrollTo(0, 0); }
+
+function topBar(title, back) {
+  return `<header class="top"${S.data && S.data.test ? ' style="background:#8a5a00"' : ''}><button onclick="${back || "go('due')"}">←</button><h1>${esc(title)}</h1><span id="sync-status" class="status"></span></header>`;
+}
+
+function renderMenu() {
+  const dc = dayClosedToday();
+  const n = depositCandidates('Cash').length + depositCandidates('Cheque').length;
+  $app.innerHTML = topBar('Menu') + `<main>
+    <button class="shop" onclick="openDayClose()"><div class="name">Day Close</div><div class="meta">${dc ? 'Done for today ✓' : 'Not done yet today – do it before 7 pm'}</div></button>
+    <button class="shop" onclick="openDeposit()"><div class="name">Bank Deposit</div><div class="meta">${n ? n + ' cash/cheque collection' + (n > 1 ? 's' : '') + ' not yet deposited' : 'Nothing waiting to be deposited'}</div></button>
+    <button class="shop" onclick="openStock()"><div class="name">Stock Received</div><div class="meta">${stockMenuText()}</div></button>
+    <button class="shop" onclick="openMonthClose()"><div class="name">Month Close</div><div class="meta">${monthCloseMenuText()}</div></button>
+    <button class="shop" onclick="openProspects()"><div class="name">New shops (Prospects)</div><div class="meta">${prospectMenuText()}</div></button>
+    <button class="shop" onclick="S.view='pad';S.pad={pad_id:'P'+uid(),first_no:'',last_no:'',photo:''};render()"><div class="name">Add a slip pad</div><div class="meta">When you get a new pad of slips</div></button>
+    <button class="shop" onclick="go('due');pullData(true)"><div class="name">Refresh shops</div><div class="meta">${S.data && S.data.pulledAt ? 'Last updated ' + new Date(S.data.pulledAt).toLocaleString('en-IN') : ''}</div></button>
+    <button class="shop" onclick="signOut()"><div class="name">Sign out</div><div class="meta">Only when nothing is waiting to send</div></button>
+    <div class="small" style="text-align:center;margin-top:16px">App version ${APP_VERSION}</div></main>`;
+  renderHeaderStatus();
+}
+
+function paymentsToday() {
+  const tk = todayKey(), seen = {}, out = [];
+  const add = (id, mode, amt, paid) => { if (seen[id]) return; seen[id] = 1; if (paid && Number(amt) > 0) out.push({mode: mode, amount: Number(amt)}); };
+  (S.data && S.data.visitedToday || []).forEach(v => add(v.visit_id, v.pay_mode, v.amount, v.paid));
+  S.outbox.filter(o => o.type === 'visit' && todayKey(o.payload.visit_time) === tk).forEach(o => add(o.payload.visit_id, o.payload.fields.pay_mode, o.payload.fields.amount, (o.payload.fields.what_happened || []).indexOf('Payment collected') > -1));
+  (S.sentLog || []).filter(x => x.type === 'visit' && x.visit_time && todayKey(x.visit_time) === tk).forEach(x => add(x.id, x.pay_mode, x.amount, x.paid));
+  return {seen: Object.keys(seen).length, cash: out.filter(x => x.mode === 'Cash').reduce((a, x) => a + x.amount, 0), cheques: out.filter(x => x.mode === 'Cheque').length, chequeAmt: out.filter(x => x.mode === 'Cheque').reduce((a, x) => a + x.amount, 0), upi: out.filter(x => x.mode === 'UPI' || x.mode === 'Bank transfer').reduce((a, x) => a + x.amount, 0)};
+}
+
+function dayClosedToday() {
+  const tk = todayKey();
+  return !!((S.data && S.data.dayClosed && S.data.todayDate === tk) || S.outbox.some(o => o.type === 'dayclose' && o.payload.close_date === tk) || (S.sentLog || []).some(x => x.type === 'dayclose' && x.close_date === tk));
+}
+
+function openDayClose() { S.dc = {note: '', confirm: false}; S.view = 'dayclose'; render(); window.scrollTo(0, 0); }
+
+function renderDayClose() {
+  const p = paymentsToday();
+  const waitingVisits = S.outbox.filter(o => o.type === 'visit').length;
+  const done = dayClosedToday();
+  let h = topBar('Day Close', 'menu()') + `<main><div class="card"><h2>${new Date().toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long'})}</h2>
+    <div class="row"><div class="label">Visits logged today</div><b>${p.seen}</b></div>
+    <div class="row"><div class="label">Cash collected today<small>Deposit by 1 pm next working day</small></div><b>${money(p.cash)}</b></div>
+    <div class="row"><div class="label">Cheques collected today</div><b>${p.cheques}${p.cheques ? ' · ' + money(p.chequeAmt) : ''}</b></div>
+    <div class="row"><div class="label">UPI / bank transfer today<small>Goes straight to the company</small></div><b>${money(p.upi)}</b></div></div>`;
+  if (waitingVisits) h += `<div class="warn">${waitingVisits} visit${waitingVisits > 1 ? 's' : ''} not yet sent – they will send automatically. You can still close the day.</div>`;
+  if (done) h += `<div class="ok">Day Close is done for today ✓</div></main>`;
+  else h += `<div class="card"><label class="field">Note (optional)</label><textarea oninput="S.dc.note=this.value">${esc(S.dc.note)}</textarea>
+    <label class="check"><input type="checkbox" ${S.dc.confirm ? 'checked' : ''} onchange="S.dc.confirm=this.checked;document.getElementById('dcbtn').disabled=!this.checked"> I confirm all my visits today are logged</label>
+    <br><button class="btn" id="dcbtn" ${S.dc.confirm ? '' : 'disabled'} onclick="saveDayClose()">Submit Day Close</button></div></main>`;
+  $app.innerHTML = h;
+  renderHeaderStatus();
+}
+
+async function saveDayClose() {
+  if (!S.dc.confirm || dayClosedToday()) return;
+  const id = 'DC' + uid();
+  await ffOutboxPut({id: id, type: 'dayclose', payload: {dayclose_id: id, close_date: todayKey(), note: S.dc.note, confirm: true, saved_at: new Date().toISOString()}, created: Date.now(), label: 'Day Close ' + new Date().toLocaleDateString('en-IN')});
+  await refreshOutbox();
+  toast('Day Close saved ✓'); S.view = 'due'; render();
+  syncNow();
+}
+
+function depositedIds() {
+  const d = {};
+  S.outbox.filter(o => o.type === 'deposit').forEach(o => (o.payload.collections || []).forEach(id => { d[id] = 1; }));
+  (S.sentLog || []).filter(x => x.type === 'deposit').forEach(x => (x.collections || []).forEach(id => { d[id] = 1; }));
+  return d;
+}
+
+function depositCandidates(type) {
+  const tk = todayKey(), dep = depositedIds(), seen = {}, out = [];
+  const shopName = id => { const s = (S.data && S.data.shops || []).find(x => x.shop_id === id); return s ? s.shop_name : id; };
+  const add = c => { if (seen[c.visit_id] || dep[c.visit_id] || c.pay_mode !== type || !(Number(c.amount) > 0)) return; seen[c.visit_id] = 1; c.future = type === 'Cheque' && c.cheque_date && c.cheque_date > tk; out.push(c); };
+  (S.data && S.data.depositable || []).forEach(c => add(Object.assign({}, c)));
+  S.outbox.filter(o => o.type === 'visit' && (o.payload.fields.what_happened || []).indexOf('Payment collected') > -1).forEach(o => add({visit_id: o.payload.visit_id, shop_id: o.payload.shop_id, shop_name: shopName(o.payload.shop_id), visit_time: o.payload.visit_time, pay_mode: o.payload.fields.pay_mode, amount: o.payload.fields.amount, slip_no: o.payload.fields.slip_no, cheque_date: o.payload.fields.cheque_date, unsent: true}));
+  (S.sentLog || []).filter(x => x.type === 'visit' && x.paid).forEach(x => add({visit_id: x.id, shop_id: x.shop_id, shop_name: shopName(x.shop_id), visit_time: x.visit_time, pay_mode: x.pay_mode, amount: x.amount, slip_no: x.slip_no, cheque_date: x.cheque_date}));
+  return out.sort((a, b) => (a.visit_time || '') < (b.visit_time || '') ? -1 : 1);
+}
+
+async function openDeposit() {
+  const draft = await ffGet('depDraft');
+  S.dep = draft || {deposit_id: 'DP' + uid(), type: '', picks: {}, lines: [], slip_amount: '', bank_branch: '', deposit_ref: '', slip_photo: '', note: ''};
+  S.view = 'deposit'; render(); window.scrollTo(0, 0);
+}
+
+function depDraft() { clearTimeout(depDraft.t); depDraft.t = setTimeout(() => ffSet('depDraft', S.dep), 300); }
+
+function depInvoices(shopId, lineIdx) {
+  const pending = {};
+  S.outbox.filter(o => o.type === 'visit').forEach(o => (o.payload.lines || []).forEach(l => { pending[l.invoice_no] = (pending[l.invoice_no] || 0) + Number(l.amount); }));
+  S.outbox.filter(o => o.type === 'deposit').forEach(o => (o.payload.lines || []).forEach(l => (l.splits || []).forEach(x => { pending[x.invoice_no] = (pending[x.invoice_no] || 0) + Number(x.amount); })));
+  S.dep.lines.forEach((l, k) => { if (k !== lineIdx) Object.keys(l.splits || {}).forEach(inv => { pending[inv] = (pending[inv] || 0) + (Number(l.splits[inv].amount) || 0); }); });
+  return (S.data.invoices || []).filter(i => i.shop_id === shopId).map(i => Object.assign({}, i, {balance: Math.round((i.balance - (pending[i.invoice_no] || 0)) * 100) / 100})).filter(i => i.balance > 0.009);
+}
+
+function depTotal() {
+  const c = depositCandidates(S.dep.type).filter(x => S.dep.picks[x.visit_id]).reduce((a, x) => a + Number(x.amount), 0);
+  const l = S.dep.lines.reduce((a, x) => a + (Number(x.amount) || 0), 0);
+  return Math.round((c + l) * 100) / 100;
+}
+
+function depValidate() {
+  const d = S.dep, m = [];
+  if (!d.type) { m.push('Cash or Cheque'); return m; }
+  const picked = depositCandidates(d.type).filter(x => d.picks[x.visit_id]);
+  if (!picked.length && !d.lines.length) m.push('Tick the collections in this deposit, or add an older payment');
+  d.lines.forEach((l, k) => {
+    const n = 'Older payment ' + (k + 1);
+    if (!l.shop_id) { m.push(n + ': shop'); return; }
+    if (!(Number(l.amount) > 0)) m.push(n + ': total amount');
+    if (d.type === 'Cheque') {
+      if (!String(l.cheque_no || '').trim()) m.push(n + ': cheque number');
+      if (!l.cheque_date) m.push(n + ': cheque date');
+      else { const days = daysSince(l.cheque_date + 'T12:00:00+05:30'); if (days > 90 || days < 0) m.push(n + ': cheque date must be within the last 90 days'); }
+    }
+    const inv = depInvoices(l.shop_id, k);
+    const sp = Object.keys(l.splits || {}).filter(x => Number(l.splits[x].amount) > 0);
+    if (!sp.length) m.push(n + ': split it across the shop\'s invoices');
+    const sum = sp.reduce((a, x) => a + Number(l.splits[x].amount), 0);
+    if (sp.length && Math.abs(sum - (Number(l.amount) || 0)) > 0.009) m.push(n + ': split adds up to ' + money(sum) + ', total is ' + money(l.amount || 0));
+    sp.forEach(x => { const i = inv.find(y => y.invoice_no === x); const a = Number(l.splits[x].amount); if (!i) m.push(n + ': invoice ' + x + ' is not open'); else if (a > i.balance + 0.009) m.push(n + ': ' + x + ' more than its balance ' + money(i.balance)); else if (a < i.balance - 0.009 && !l.splits[x].balance_reason) m.push(n + ': ' + x + ' – what happens to the remaining ' + money(i.balance - a)); });
+  });
+  const total = depTotal();
+  if (!(Number(d.slip_amount) > 0)) m.push('Amount on the bank slip');
+  else if (Math.abs(Number(d.slip_amount) - total) > 0.009) m.push('Slip amount must equal ' + money(total) + ' (the collections ticked + older payments)');
+  if (!String(d.bank_branch).trim()) m.push('Bank branch');
+  if (!d.slip_photo) m.push('Photo of the stamped deposit slip');
+  return m;
+}
+
+function depMissing() {
+  const el = document.getElementById('missing'); if (!el) return;
+  const m = depValidate(); const shown = S.showAllMissing ? m : m.slice(0, 2);
+  el.innerHTML = m.length ? 'Still needed: ' + shown.map(esc).join(' · ') + (m.length > shown.length ? ` <u onclick="S.showAllMissing=true;depMissing()">+${m.length - shown.length} more</u>` : '') : '';
+  document.getElementById('savebtn').textContent = m.length ? 'Save deposit (' + m.length + ' to fill)' : 'Save deposit';
+  const t = document.getElementById('deptotal'); if (t) t.textContent = money(depTotal());
+}
+
+function depSet(k, v, rerender) { S.dep[k] = v; depDraft(); if (rerender) renderDeposit(true); else depMissing(); }
+function depPick(id, on) { S.dep.picks[id] = on; depDraft(); depMissing(); }
+function depType(t) { if (S.dep.type !== t) { S.dep.type = t; S.dep.picks = {}; } depDraft(); renderDeposit(true); }
+function depAddLine() { S.dep.lines.push({shop_id: '', amount: '', cheque_no: '', cheque_date: '', splits: {}}); depDraft(); renderDeposit(true); }
+function depDelLine(k) { S.dep.lines.splice(k, 1); depDraft(); renderDeposit(true); }
+function depLine(k, f, v, rerender) { S.dep.lines[k][f] = v; if (f === 'shop_id') S.dep.lines[k].splits = {}; depDraft(); if (rerender) renderDeposit(true); else depMissing(); }
+function depSplit(k, inv, f, v) {
+  const l = S.dep.lines[k]; l.splits[inv] = l.splits[inv] || {amount: '', balance_reason: ''}; l.splits[inv][f] = v; depDraft();
+  if (f === 'amount') { const i = depInvoices(l.shop_id, k).find(x => x.invoice_no === inv); const el = document.getElementById('dr-' + k + '-' + inv.replace(/[^A-Za-z0-9]/g, '')); if (el && i) el.innerHTML = depRemHtml(k, i, l.splits[inv]); }
+  depMissing();
+}
+function depRemHtml(k, i, sp) {
+  const a = Number(sp.amount); if (!(a > 0 && a < i.balance - 0.009)) return '';
+  return `<label class="field">Remaining ${money(i.balance - a)} on this invoice is:</label><select onchange="depSplit(${k},'${esc(i.invoice_no)}','balance_reason',this.value)"><option value="">Choose</option>${BALANCE_REASONS.map(r => `<option ${sp.balance_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>`;
+}
+
+function depPhoto() {
+  const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+  input.onchange = async () => { const file = input.files && input.files[0]; if (!file) return; try { S.dep.slip_photo = await compress(file); depDraft(); renderDeposit(true); } catch (e) { toast('Photo failed. Try again.'); } };
+  input.click();
+}
+
+async function cancelDeposit() {
+  if ((S.dep.type || S.dep.lines.length) && !confirm('Leave without saving this deposit? What you entered will be lost.')) return;
+  await ffSet('depDraft', null); S.dep = null; menu();
+}
+
+function renderDeposit(keepScroll) {
+  const y = window.scrollY, d = S.dep;
+  let h = topBar('Bank Deposit', 'cancelDeposit()') + `<main><div class="card"><h2>What did you deposit?</h2><div class="choices">${['Cash', 'Cheque'].map(t => `<button class="${d.type === t ? 'on' : ''}" onclick="depType('${t}')">${t}</button>`).join('')}</div><div class="small" style="margin-top:8px">Deposit cash and cheques separately – one deposit each.</div></div>`;
+  if (d.type) {
+    const cands = depositCandidates(d.type);
+    h += `<div class="card"><h2>1. Collections in this deposit</h2>${cands.length ? cands.map(c => `<label class="check"><input type="checkbox" ${d.picks[c.visit_id] ? 'checked' : ''} ${c.future ? 'disabled' : ''} onchange="depPick('${esc(c.visit_id)}',this.checked)"> <span><b>${esc(c.shop_name)}</b> · ${money(c.amount)}<br><span class="small">${c.visit_time ? new Date(c.visit_time).toLocaleDateString('en-IN') : ''}${c.slip_no ? ' · slip ' + esc(c.slip_no) : ''}${c.future ? ' · cheque dated ' + esc(c.cheque_date) + ' – cannot deposit yet' : ''}${c.unsent ? ' · visit not yet sent' : ''}</span></span></label>`).join('') : `<div class="small">No ${d.type.toLowerCase()} collections waiting to be deposited.</div>`}</div>`;
+    h += `<div class="card"><h2>2. Older payments not logged in the app</h2><div class="small">Only for ${d.type.toLowerCase()} collected before the app (or never logged). Split each one across that shop's open invoices.</div>`;
+    d.lines.forEach((l, k) => {
+      h += `<div class="line"><div class="top"><span>Older payment ${k + 1}</span><span onclick="depDelLine(${k})" style="color:var(--red)">Remove</span></div>
+        <select onchange="depLine(${k},'shop_id',this.value,true)"><option value="">Choose shop</option>${(S.data.shops || []).filter(s => s.status === 'Active').sort((a, b) => a.shop_name.localeCompare(b.shop_name)).map(s => `<option value="${esc(s.shop_id)}" ${l.shop_id === s.shop_id ? 'selected' : ''}>${esc(s.shop_name)}</option>`).join('')}</select>
+        <label class="field">Total amount of this ${d.type === 'Cheque' ? 'cheque' : 'cash'} (₹)</label><input class="text" inputmode="decimal" value="${esc(l.amount)}" oninput="depLine(${k},'amount',this.value.replace(/[^0-9.]/g,''))">`;
+      if (d.type === 'Cheque') h += `<label class="field">Cheque number</label><input class="text" inputmode="numeric" value="${esc(l.cheque_no)}" oninput="depLine(${k},'cheque_no',this.value.trim())"><label class="field">Date written on the cheque</label><input class="text" type="date" value="${esc(l.cheque_date)}" onchange="depLine(${k},'cheque_date',this.value)">`;
+      if (l.shop_id) {
+        const inv = depInvoices(l.shop_id, k);
+        h += inv.length ? `<label class="field">Split across invoices</label>${inv.map(i => { const sp = l.splits[i.invoice_no] || {amount: '', balance_reason: ''}; return `<div class="line"><div class="top"><span>${esc(i.label || i.invoice_no)}</span><span>balance ${money(i.balance)}</span></div><input class="text" inputmode="decimal" placeholder="Amount against this invoice" value="${esc(sp.amount)}" oninput="depSplit(${k},'${esc(i.invoice_no)}','amount',this.value.replace(/[^0-9.]/g,''))"><div id="dr-${k}-${i.invoice_no.replace(/[^A-Za-z0-9]/g, '')}">${depRemHtml(k, i, sp)}</div></div>`; }).join('')}` : '<div class="err">This shop has no open invoices. Call Ashwin before depositing this payment.</div>';
+      }
+      h += `</div>`;
+    });
+    h += `<br><button class="btn small ghost" onclick="depAddLine()">+ Add an older payment</button></div>`;
+    h += `<div class="card"><h2>3. Bank slip</h2><div class="row"><div class="label">Total of 1 + 2</div><b id="deptotal">${money(depTotal())}</b></div>
+      <label class="field">Amount on the bank deposit slip (₹)</label><input class="text" inputmode="decimal" value="${esc(d.slip_amount)}" oninput="depSet('slip_amount',this.value.replace(/[^0-9.]/g,''))">
+      <label class="field">Bank branch</label><input class="text" value="${esc(d.bank_branch)}" oninput="depSet('bank_branch',this.value)">
+      <label class="field">Reference / challan number (if any)</label><input class="text" value="${esc(d.deposit_ref)}" oninput="depSet('deposit_ref',this.value)">
+      <label class="field">Photo of the stamped deposit slip</label><div class="photo">${d.slip_photo ? `<img src="${d.slip_photo}">` : ''}<button class="btn small ${d.slip_photo ? 'ghost' : ''}" onclick="depPhoto()">${d.slip_photo ? 'Retake photo' : 'Take photo'}</button></div>
+      <label class="field">Note (optional)</label><textarea oninput="depSet('note',this.value)">${esc(d.note)}</textarea></div>`;
+  }
+  h += `</main><div class="savebar"><div class="inner"><div class="missing" id="missing"></div><button class="btn" id="savebtn" onclick="saveDeposit()">Save deposit</button></div></div>`;
+  $app.innerHTML = h;
+  renderHeaderStatus(); depMissing();
+  if (keepScroll) window.scrollTo(0, y);
+}
+
+async function saveDeposit() {
+  const m = depValidate();
+  if (m.length) { S.showAllMissing = true; depMissing(); toast('Fill the items listed in red first'); return; }
+  const d = S.dep;
+  const cols = depositCandidates(d.type).filter(x => d.picks[x.visit_id] && !x.future).map(x => x.visit_id);
+  const lines = d.lines.map(l => ({shop_id: l.shop_id, amount: Number(l.amount), cheque_no: l.cheque_no, cheque_date: l.cheque_date, splits: Object.keys(l.splits).filter(x => Number(l.splits[x].amount) > 0).map(x => ({invoice_no: x, amount: Number(l.splits[x].amount), balance_reason: l.splits[x].balance_reason || ''}))}));
+  const payload = {deposit_id: d.deposit_id, deposit_type: d.type, collections: cols, lines: lines, slip_amount: Number(d.slip_amount), bank_branch: d.bank_branch.trim(), deposit_ref: d.deposit_ref.trim(), slip_photo: d.slip_photo, note: d.note, saved_at: new Date().toISOString()};
+  await ffOutboxPut({id: d.deposit_id, type: 'deposit', payload: payload, created: Date.now(), label: 'Bank deposit – ' + d.type + ' ' + money(d.slip_amount)});
+  await ffSet('depDraft', null); S.dep = null;
+  await refreshOutbox();
+  toast('Deposit saved ✓'); S.view = 'due'; render();
+  syncNow();
 }
 
 async function signOut() {
-  if (S.outbox.length) { alert('You have ' + S.outbox.length + ' visit(s) not yet sent. Connect to the internet and wait until they are sent before signing out.'); return; }
+  if (S.outbox.length) { alert('You have ' + S.outbox.length + ' item(s) not yet sent. Connect to the internet and wait until they are sent before signing out.'); return; }
   if (!confirm('Sign out of this phone?')) return;
   await ffSet('session', null); await ffSet('data', null); S.session = null; S.data = null; render();
 }
