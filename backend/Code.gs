@@ -1,4 +1,4 @@
-const API_VERSION = '1.8.1';
+const API_VERSION = '1.9.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -151,6 +151,7 @@ function sheet_(ss, rep, name) {
   if (!sh) {
     const src = ss.getSheetByName(name);
     sh = ss.insertSheet(tname);
+    CacheService.getScriptCache().remove('sheet_meta');
     if (src) sh.getRange(1, 1, 1, src.getLastColumn()).setValues(src.getRange(1, 1, 1, src.getLastColumn()).getValues());
   }
   return sh;
@@ -186,10 +187,70 @@ function list_(v) {
   return String(v || '').split(',').map(s => s.trim()).filter(Boolean);
 }
 
+const BOOT_SHEETS_ = ['APP_Shops', 'SHOP_Config', 'APP_Today', 'APP_Products', 'APP_Invoices', 'APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_Dispatches', 'APP_MonthClose', 'APP_Prospects'];
+const BOOT_TEST_ = ['APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_MonthClose', 'APP_Prospects'];
+const DATE_COLS_ = {visit_time: 1, cheque_date: 1, close_date: 1, dispatch_date: 1, month: 1, counted_at: 1, received_time: 1, created_at: 1, last_visit: 1, inv_date: 1, saved_at: 1, onboarded_on: 1};
+
+function sheetMeta_(fresh) {
+  const cache = CacheService.getScriptCache();
+  const hit = fresh ? null : cache.get('sheet_meta');
+  if (hit) return JSON.parse(hit);
+  const r = Sheets.Spreadsheets.get(FIELD_ID, {fields: 'properties.timeZone,sheets.properties.title'});
+  const meta = {tz: r.properties.timeZone || TZ, names: (r.sheets || []).map(x => x.properties.title)};
+  cache.put('sheet_meta', JSON.stringify(meta), 3600);
+  return meta;
+}
+
+function serialDate_(n, offMs) {
+  return new Date(Math.round((n - 25569) * 86400000) - offMs);
+}
+
+function tableFrom_(values, offMs) {
+  const head = (values[0] || []).map(h => String(h).trim());
+  const rows = values.slice(1).filter(r => r.some(c => c !== '' && c !== null && c !== undefined)).map(r => {
+    const o = {};
+    head.forEach((h, i) => {
+      if (!h) return;
+      let v = r[i] === undefined || r[i] === null ? '' : r[i];
+      if (DATE_COLS_[h] && typeof v === 'number') v = serialDate_(v, offMs);
+      o[h] = v;
+    });
+    return o;
+  });
+  return {head: head, rows: rows};
+}
+
+function bulk_(names) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const meta = sheetMeta_(attempt > 0);
+      const want = names.filter(n => meta.names.indexOf(n) > -1);
+      const z = Utilities.formatDate(new Date(), meta.tz, 'Z');
+      const offMs = (z[0] === '-' ? -1 : 1) * (Number(z.slice(1, 3)) * 60 + Number(z.slice(3, 5))) * 60000;
+      const res = Sheets.Spreadsheets.Values.batchGet(FIELD_ID, {ranges: want.map(n => "'" + n.replace(/'/g, "''") + "'"), valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'SERIAL_NUMBER'});
+      const out = {};
+      (res.valueRanges || []).forEach((vr, k) => { out[want[k]] = tableFrom_(vr.values || [], offMs); });
+      mark_('bulk' + attempt);
+      return out;
+    } catch (err) {
+      if (attempt > 0) {
+        try { serverError_({op: 'bulk'}, err); } catch (e2) {}
+        const ss = ss_();
+        const out = {};
+        names.forEach(n => { const sh = ss.getSheetByName(n); if (sh) out[n] = table_(sh); });
+        mark_('bulkfallback');
+        return out;
+      }
+    }
+  }
+}
+
 function bootstrap_(rep) {
-  const ss = ss_();
+  const B = bulk_(rep.test ? BOOT_SHEETS_.concat(BOOT_TEST_.map(n => 'TEST_' + n)) : BOOT_SHEETS_);
+  const rowsOf = n => (B[n] || {rows: []}).rows;
+  const both = n => rep.test ? rowsOf(n).concat(rowsOf('TEST_' + n)) : rowsOf(n);
   const me = rep.email;
-  const shops = table_(ss.getSheetByName('APP_Shops')).rows
+  const shops = rowsOf('APP_Shops')
     .filter(s => String(s.rep_email).trim().toLowerCase() === me)
     .map(s => ({
       shop_id: String(s.shop_id), shop_name: String(s.shop_name), status: String(s.status),
@@ -197,12 +258,11 @@ function bootstrap_(rep) {
       owner_mobile: String(s.owner_mobile || ''), pincode: String(s.pincode || '')
     }));
   const sizeOf = {};
-  const cfgSh = ss.getSheetByName('SHOP_Config');
-  if (cfgSh) table_(cfgSh).rows.forEach(c => { sizeOf[String(c.shop_id).trim()] = Number(c.pack_size) || 50; });
+  rowsOf('SHOP_Config').forEach(c => { sizeOf[String(c.shop_id).trim()] = Number(c.pack_size) || 50; });
   shops.forEach(s => { s.pack_size = sizeOf[s.shop_id] || 50; });
   const myShopIds = {};
   shops.forEach(s => { myShopIds[s.shop_id] = true; });
-  const today = table_(ss.getSheetByName('APP_Today')).rows
+  const today = rowsOf('APP_Today')
     .filter(t => myShopIds[String(t.shop_id)])
     .map(t => ({
       shop_id: String(t.shop_id), amount_due: Number(t.amount_due) || 0, refill_plan: String(t.refill_plan || ''),
@@ -210,13 +270,13 @@ function bootstrap_(rep) {
       payment_overdue: t.payment_overdue === true || String(t.payment_overdue).toUpperCase() === 'TRUE',
       last_visit: iso_(t.last_visit), flag: String(t.flag || '')
     }));
-  const products = table_(ss.getSheetByName('APP_Products')).rows
+  const products = rowsOf('APP_Products')
     .filter(p => String(p.active).toUpperCase().indexOf('Y') === 0 || p.active === true)
     .map(p => ({sku: String(p.sku), name: String(p.name), pack: String(p.pack || '')}));
-  const invoices = table_(ss.getSheetByName('APP_Invoices')).rows
+  const invoices = rowsOf('APP_Invoices')
     .filter(i => myShopIds[String(i.shop_id)] && ['Open', 'Awaiting approval'].indexOf(String(i.status)) > -1)
     .map(i => ({invoice_no: String(i.invoice_no), shop_id: String(i.shop_id), inv_date: iso_(i.inv_date), balance: Number(i.balance) || 0, label: String(i.label || i.invoice_no)}));
-  const visitsT = {rows: rowsBoth_(ss, rep, 'APP_Visits')};
+  const visitsT = {rows: both('APP_Visits')};
   const lastByShop = {};
   const usedSlips = [];
   const usedRefs = [];
@@ -241,18 +301,18 @@ function bootstrap_(rep) {
     });
     last[sid] = {visit_time: iso_(v.visit_time), after: after};
   });
-  const pads = rowsBoth_(ss, rep, 'APP_SlipPads')
+  const pads = both('APP_SlipPads')
     .filter(p => String(p.rep_email).trim().toLowerCase() === me)
     .map(p => ({pad_id: String(p.pad_id), first_no: Number(p.first_no), last_no: Number(p.last_no)}));
   const todayKey = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
   const deposited = {};
-  rowsBoth_(ss, rep, 'APP_Deposits').forEach(d => list_(d.collections).forEach(id => { deposited[id] = true; }));
+  both('APP_Deposits').forEach(d => list_(d.collections).forEach(id => { deposited[id] = true; }));
   const shopName = {};
   shops.forEach(s => { shopName[s.shop_id] = s.shop_name; });
   const depositable = visitsT.rows
     .filter(v => String(v.rep_email).trim().toLowerCase() === me && ['Cash', 'Cheque'].indexOf(String(v.pay_mode)) > -1 && String(v.what_happened).indexOf('Payment collected') > -1 && Number(v.amount) > 0 && !String(v.deposit_id || '').trim() && !deposited[String(v.visit_id)])
     .map(v => ({visit_id: String(v.visit_id), shop_id: String(v.shop_id), shop_name: shopName[String(v.shop_id)] || String(v.shop_id), visit_time: iso_(v.visit_time), pay_mode: String(v.pay_mode), amount: Number(v.amount), slip_no: String(v.slip_no || ''), cheque_no: String(v.cheque_no || ''), cheque_date: v.cheque_date instanceof Date ? Utilities.formatDate(v.cheque_date, TZ, 'yyyy-MM-dd') : ''}));
-  const dayCloses = rowsBoth_(ss, rep, 'APP_DayClose')
+  const dayCloses = both('APP_DayClose')
     .filter(d => String(d.rep_email).trim().toLowerCase() === me && d.close_date instanceof Date)
     .map(d => Utilities.formatDate(d.close_date, TZ, 'yyyy-MM-dd'));
   const visitedToday = visitsT.rows
@@ -260,25 +320,23 @@ function bootstrap_(rep) {
     .map(v => ({visit_id: String(v.visit_id), shop_id: String(v.shop_id), visit_time: iso_(v.visit_time), pay_mode: String(v.pay_mode || ''), amount: Number(v.amount) || 0, paid: String(v.what_happened).indexOf('Payment collected') > -1}));
   mark_('core');
   const received = {};
-  rowsBoth_(ss, rep, 'APP_StockReceived').forEach(r => { if (String(r.rep_email).trim().toLowerCase() === me) received[String(r.dispatch_id)] = true; });
+  both('APP_StockReceived').forEach(r => { if (String(r.rep_email).trim().toLowerCase() === me) received[String(r.dispatch_id)] = true; });
   const dispBy = {};
-  const dSh = ss.getSheetByName('APP_Dispatches');
-  if (dSh) table_(dSh).rows.forEach(d => {
+  rowsOf('APP_Dispatches').forEach(d => {
     const id = String(d.dispatch_id || '').trim();
     if (!id || received[id] || String(d.rep_email).trim().toLowerCase() !== me || !(Number(d.qty_sent) > 0)) return;
     const x = dispBy[id] = dispBy[id] || {dispatch_id: id, dispatch_date: d.dispatch_date instanceof Date ? Utilities.formatDate(d.dispatch_date, TZ, 'yyyy-MM-dd') : String(d.dispatch_date || ''), lines: []};
     x.lines.push({sku: String(d.sku).trim().toUpperCase(), qty: Number(d.qty_sent)});
   });
   const mc = monthCloseWindow_(rep);
-  const mcDone = rowsBoth_(ss, rep, 'APP_MonthClose').some(r => String(r.rep_email).trim().toLowerCase() === me && monthKeyOf_(r.month) === mc.month);
-  const pSh = ss.getSheetByName(rep.test ? 'TEST_APP_Prospects' : 'APP_Prospects');
-  const prospects = pSh && pSh.getLastRow() > 1 ? table_(pSh).rows.filter(p => String(p.rep_email).trim().toLowerCase() === me && p.prospect_id).map(p => ({
+  const mcDone = both('APP_MonthClose').some(r => String(r.rep_email).trim().toLowerCase() === me && monthKeyOf_(r.month) === mc.month);
+  const prospects = rowsOf(rep.test ? 'TEST_APP_Prospects' : 'APP_Prospects').filter(p => String(p.rep_email).trim().toLowerCase() === me && p.prospect_id).map(p => ({
     prospect_id: String(p.prospect_id), shop_name: String(p.shop_name || ''), pincode: String(p.pincode || ''), created_at: iso_(p.created_at),
     q8_community: String(p.q8_community || ''), q9_shop_type: String(p.q9_shop_type || ''),
     has_f2: String(p.q10_footfall === null || p.q10_footfall === undefined ? '' : p.q10_footfall) !== '', has_f3: String(p.q11_terms || '') !== '',
     score: p.score === '' ? '' : Number(p.score), result: String(p.result || ''), score_detail: String(p.score_detail || ''),
     decision: String(p.decision || ''), decision_note: String(p.decision_note || ''), shop_id: String(p.shop_id || ''), stop: f1Stop_(p)
-  })) : [];
+  }));
   return {
     ok: true, version: API_VERSION, now: new Date().toISOString(), rep: rep, test: !!rep.test, shops: shops, today: today,
     products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday, depositable: depositable, dayClosed: dayCloses.indexOf(todayKey) > -1, todayDate: todayKey,
