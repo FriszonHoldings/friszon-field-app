@@ -1,4 +1,3 @@
-function nowIst() { const s = new Date().toLocaleString('en-US', {timeZone: 'Asia/Kolkata', hour12: false, weekday: 'short', hour: '2-digit', minute: '2-digit'}); const m = s.match(/(\w+),?\s+(\d+):(\d+)/); return {dow: m ? m[1] : '', mins: m ? (Number(m[2]) % 24) * 60 + Number(m[3]) : 0}; }
 function intOk(v) { return v !== '' && v !== undefined && v !== null && /^\d+$/.test(String(v)); }
 function missingHtml(m, fn) { const shown = S.showAllMissing ? m : m.slice(0, 2); return m.length ? 'Still needed: ' + shown.map(esc).join(' · ') + (m.length > shown.length ? ` <u onclick="S.showAllMissing=true;${fn}()">+${m.length - shown.length} more</u>` : '') : ''; }
 function shotInto(obj, key, after, stampKey) {
@@ -150,7 +149,7 @@ const PQ = {
   q8_community: {t: 'Q8 · Community', h: 'Who are most of the customers? Ask the owner or staff.', o: ['South Indian', 'Cosmopolitan', 'Mixed', 'PG or hostel belt']},
   q9_shop_type: {t: 'Q9 · Shop type', h: 'Supermarket = self-service, baskets, several aisles. Premium kirana = counter service with some premium items.', o: ['Supermarket', 'Organic or health store', 'Mid-market with premium section', 'Premium kirana', 'Gated-community store']},
   q11_terms: {t: 'Q11 · Terms agreed', h: 'Explain: 30% on every pack · pays only for what sold (when half sold or after 30 days) · no listing or display fee · start with 4 packs of 5 products · older packs in front, near-expiry swapped. Owner agrees to ALL? No stops here. Never offer anything extra.', o: ['Yes', 'No']},
-  q12_checks: {t: 'Q12 · Checks agreed', h: 'Owner agrees to: count + shelf photo every visit · one signed and stamped sheet every month · payment only to Friszon QR or bank. Yes only if agreed AND you photograph a licence (GST / FSSAI / trade) AND the shop stamp. No stops here.', o: ['Yes', 'No']},
+  q12_checks: {t: 'Q12 · Checks agreed', h: 'Owner agrees to: count + shelf photo every visit · one signed and stamped sheet every month · payment only to Friszon QR or bank. Yes only if the owner agrees to all three and the shop has a licence (GST / FSSAI / trade) and a shop stamp. No stops here.', o: ['Yes', 'No']},
   q13_shelf: {t: 'Q13 · Shelf offered', h: 'Where will our 5 products go? Eye level = chest to eyes, hand level = waist to chest. Bottom shelf (below knee) stops here.', o: ['Eye or hand level, all facing front', 'Lower shelf, but all visible', 'Bottom shelf only']},
   q14_owner: {t: 'Q14 · Owner', h: 'Ask: will you recommend our podi? Can we do a free tasting on a weekend morning? Added a new small brand in the last 6 months (ask to see it)?', o: ['Keen, yes to all 3', 'Keen, but said no to one', 'Not interested']},
   q15_reliability: {t: 'Q15 · Reliability', h: 'Open 1+ year · shelf prices at MRP · pays suppliers on time (ask another supplier quietly) · owner around during visit hours.', o: ['All good', 'Some doubts', 'Red flags']},
@@ -206,14 +205,13 @@ async function openProspectStage(id, stage) {
   const d = await ffGet('prDraft');
   S.showAllMissing = false;
   if (d && d.prospect_id === id && d.stage === stage) S.pr = d;
-  else if (stage === 'f2') S.pr = {prospect_id: id, stage: 'f2', shop_name: p.shop_name, q10_footfall: '', q10_start_at: '', q10_end_at: '', q10_start_photo: '', q10_end_photo: ''};
-  else S.pr = {prospect_id: id, stage: 'f3', shop_name: p.shop_name, answers: {}, products: (OPENING_MIX[p.q8_community] || []).slice(), q12_licence_photo: '', q12_stamp_photo: ''};
+  else if (stage === 'f2') S.pr = {prospect_id: id, stage: 'f2', shop_name: p.shop_name, q10_footfall: ''};
+  else S.pr = {prospect_id: id, stage: 'f3', shop_name: p.shop_name, answers: {}, products: (OPENING_MIX[p.q8_community] || []).slice()};
   S.view = 'prospect'; render(); window.scrollTo(0, 0);
 }
 function prSet(k, v, re) { S.pr[k] = v; prDraft(); if (re) renderProspect(true); else prMissing(); }
 function prAns(k, v) { S.pr.answers[k] = v; prDraft(); renderProspect(true); }
 function prProd(sku, on) { const a = S.pr.products; const i = a.indexOf(sku); if (on && i < 0) a.push(sku); if (!on && i > -1) a.splice(i, 1); prDraft(); renderProspect(true); }
-function q10Window() { if (S.data && S.data.test) return ''; const n = nowIst(); if (n.dow === 'Sun') return 'The footfall count is done on a working day (Monday to Saturday).'; if (n.mins < 18 * 60 || n.mins > 19 * 60 + 45) return 'Start the count between 6:00 and 7:45 pm.'; return ''; }
 function prValidate() {
   const p = S.pr, a = p.answers || {}, m = [];
   if (p.stage === 'f1') {
@@ -228,17 +226,9 @@ function prValidate() {
     visibleQs(F1Q, a, f1Stop).forEach(k => { if (!a[k]) m.push(PQ[k].t.split(' · ')[0]); });
     if (!f1Stop(a) && !p.q2_photo) m.push('Q2 photo – two premium products with price labels');
   } else if (p.stage === 'f2') {
-    if (!p.q10_start_photo) m.push('Start photo (starts the 15-minute count)');
-    else {
-      const left = 15 * 60000 - (Date.now() - new Date(p.q10_start_at).getTime());
-      if (!p.q10_end_photo && left > 0 && !(S.data && S.data.test)) m.push('Keep counting – ' + Math.ceil(left / 60000) + ' min left');
-      else if (!p.q10_end_photo) m.push('End photo');
-      if (!intOk(p.q10_footfall)) m.push('Number of adults who walked in');
-    }
+    if (!intOk(p.q10_footfall)) m.push('Q10 – number of adults who walked in during the 15 minutes');
   } else {
     visibleQs(F3Q, a, f3Stop).forEach(k => { if (!a[k]) m.push(PQ[k].t.split(' · ')[0]); });
-    if (a.q12_checks === 'Yes' && !p.q12_licence_photo) m.push('Q12 photo – licence (GST / FSSAI / trade)');
-    if (a.q12_checks === 'Yes' && !p.q12_stamp_photo) m.push('Q12 photo – shop stamp on paper');
     if (!f3Stop(a) && a.q17_opening_order) {
       if (a.q17_opening_order === 'Standard 20 packs' && p.products.length !== 5) m.push('Choose exactly 5 products');
       if (!p.products.length || p.products.length > 5) m.push('Choose 1 to 5 products');
@@ -249,11 +239,9 @@ function prValidate() {
 function prMissing() { const el = document.getElementById('missing'); if (!el) return; const m = prValidate(); el.innerHTML = missingHtml(m, 'prMissing'); document.getElementById('savebtn').textContent = m.length ? 'Save (' + m.length + ' to fill)' : 'Save'; }
 function qBlock(k, a) { const q = PQ[k]; return `<div class="line"><b>${esc(q.t)}</b><div class="small">${esc(q.h)}</div><div class="choices" style="margin-top:8px">${q.o.map(o => `<button class="${a[k] === o ? 'on' : ''}" onclick="prAns('${k}','${esc(o)}')">${esc(o)}</button>`).join('')}</div></div>`; }
 function txt(k, label, mode, extra) { return `<label class="field">${label}</label><input class="text" ${mode ? 'inputmode="' + mode + '"' : ''} value="${esc(S.pr[k])}" oninput="prSet('${k}',${extra || 'this.value'})">`; }
-let q10Timer = null;
 function renderProspect(keep) {
   const y = window.scrollY, p = S.pr, a = p.answers || {};
-  clearInterval(q10Timer);
-  let h = topBar(p.stage === 'f1' ? 'New shop' : p.shop_name, 'cancelProspect()') + '<main>';
+    let h = topBar(p.stage === 'f1' ? 'New shop' : p.shop_name, 'cancelProspect()') + '<main>';
   if (p.stage === 'f1') {
     h += `<div class="card"><h2>Shop details</h2>${txt('shop_name', 'Shop name (exactly as on the signboard)')}${txt('owner_name', 'Owner name')}${txt('owner_mobile', 'Owner mobile', 'numeric', "this.value.replace(/[^0-9]/g,'').slice(0,10)")}
       <label class="field">Address</label><textarea oninput="prSet('address',this.value)">${esc(p.address)}</textarea>
@@ -265,22 +253,13 @@ function renderProspect(keep) {
     if (f1Stop(a)) h += `<div class="err">This shop does not qualify. Save to record it – no further steps.</div>`;
     h += `</div>`;
   } else if (p.stage === 'f2') {
-    const w = q10Window();
-    h += `<div class="card"><h2>Q10 · Footfall count</h2><div class="small">Working day, 6–8 pm. Stand where you can see the entrance. Count every adult customer who walks in for 15 minutes. Do NOT count staff, delivery people, children, people coming back in, or passers-by. Count – never estimate.</div></div>`;
-    if (!p.q10_start_photo) {
-      h += w ? `<div class="warn">${esc(w)}</div>` : `<div class="card"><label class="field">Take the START photo of the entrance – the 15 minutes start now</label><button class="btn" onclick="shotInto(S.pr,'q10_start_photo',()=>{S.pr.q10_footfall='0';prDraft();renderProspect(true)},'q10_start_at')">Take start photo</button></div>`;
-    } else {
-      h += `<div class="card"><div class="row"><div class="label">Started ${new Date(p.q10_start_at).toLocaleTimeString('en-IN', {hour: '2-digit', minute: '2-digit'})}</div><b id="q10clock"></b></div>
-        <div class="row"><div class="label">Adults who walked in</div><div class="stepper"><button onclick="q10Step(-1)">−</button><input inputmode="numeric" value="${esc(p.q10_footfall)}" oninput="prSet('q10_footfall',this.value.replace(/[^0-9]/g,''))" id="q10n"><button onclick="q10Step(1)">+</button></div></div>
-        <button class="btn ghost" style="font-size:22px;padding:22px;margin-top:8px" onclick="q10Step(1)">+1 customer walked in</button></div>
-        <div class="card"><label class="field">END photo of the entrance (after 15 minutes)</label><div id="q10end">${q10EndHtml()}</div></div>`;
-      q10Timer = setInterval(q10Tick, 1000);
-    }
+    h += `<div class="card"><h2>Q10 · Footfall count</h2><div class="small">Working day, 6–8 pm. Stand where you can see the entrance and count every adult customer who walks in for 15 minutes. Do NOT count staff, delivery people, children, people coming back in, or passers-by. Count – never estimate.</div>
+      <div class="row" style="margin-top:8px"><div class="label">Adults who walked in</div><div class="stepper"><button onclick="q10Step(-1)">−</button><input inputmode="numeric" value="${esc(p.q10_footfall)}" oninput="prSet('q10_footfall',this.value.replace(/[^0-9]/g,''))" id="q10n"><button onclick="q10Step(1)">+</button></div></div>
+      <button class="btn ghost" style="font-size:22px;padding:22px;margin-top:8px" onclick="q10Step(1)">+1 customer walked in</button></div>`;
   } else {
     h += `<div class="card"><h2>Meet the owner – Q11 to Q17</h2><div class="small">Explain each point in plain words. Never offer anything extra to get a Yes.</div>`;
     visibleQs(F3Q, a, f3Stop).forEach(k => {
       h += qBlock(k, a);
-      if (k === 'q12_checks' && a.q12_checks === 'Yes') h += `<label class="field">Photo – licence (GST certificate, FSSAI or trade licence)</label>${shotBlock(p, 'q12_licence_photo', "shotInto(S.pr,'q12_licence_photo',()=>{prDraft();renderProspect(true)})")}<label class="field">Photo – shop stamp on a blank sheet</label>${shotBlock(p, 'q12_stamp_photo', "shotInto(S.pr,'q12_stamp_photo',()=>{prDraft();renderProspect(true)})")}`;
     });
     if (f3Stop(a)) h += `<div class="err">This shop does not qualify. Save to record it.</div>`;
     h += `</div>`;
@@ -290,25 +269,15 @@ function renderProspect(keep) {
     }
   }
   h += `</main><div class="savebar"><div class="inner"><div class="missing" id="missing"></div><button class="btn" id="savebtn" onclick="saveProspect()">Save</button></div></div>`;
-  $app.innerHTML = h; renderHeaderStatus(); prMissing(); if (p.stage === 'f2' && p.q10_start_photo) q10Tick();
+  $app.innerHTML = h; renderHeaderStatus(); prMissing();
   if (keep) window.scrollTo(0, y);
 }
-function q10Left() { return 15 * 60000 - (Date.now() - new Date(S.pr.q10_start_at).getTime()); }
-function q10EndHtml() { const p = S.pr; if (p.q10_end_photo) return shotBlock(p, 'q10_end_photo', "shotInto(S.pr,'q10_end_photo',()=>{prDraft();renderProspect(true)},'q10_end_at')"); return q10Left() > 0 && !(S.data && S.data.test) ? '<div class="small">Available when the 15 minutes are up.</div>' : `<button class="btn" onclick="shotInto(S.pr,'q10_end_photo',()=>{prDraft();renderProspect(true)},'q10_end_at')">Take end photo</button>`; }
-function q10Tick() {
-  if (!S.pr || S.pr.stage !== 'f2' || S.view !== 'prospect') { clearInterval(q10Timer); return; }
-  const el = document.getElementById('q10clock'); if (!el) return;
-  const left = q10Left();
-  el.textContent = left > 0 ? Math.floor(left / 60000) + ':' + String(Math.floor(left / 1000) % 60).padStart(2, '0') + ' left' : (S.pr.q10_end_photo ? 'Done' : 'Time up – take the end photo');
-  const end = document.getElementById('q10end'); if (end && !S.pr.q10_end_photo && left <= 0 && !end.querySelector('button')) { end.innerHTML = q10EndHtml(); prMissing(); }
-  if (left <= 0 && S.pr.q10_end_photo) clearInterval(q10Timer);
-}
-function q10Step(d) { if (S.pr.q10_end_photo) { toast('Count is finished'); return; } const n = Math.max(0, (Number(S.pr.q10_footfall) || 0) + d); S.pr.q10_footfall = String(n); prDraft(); const el = document.getElementById('q10n'); if (el) el.value = n; prMissing(); }
+function q10Step(d) { const n = Math.max(0, (Number(S.pr.q10_footfall) || 0) + d); S.pr.q10_footfall = String(n); prDraft(); const el = document.getElementById('q10n'); if (el) el.value = n; prMissing(); }
 async function cancelProspect() {
   const p = S.pr;
-  const started = p.stage === 'f1' ? (p.shop_name || p.front_photo) : p.stage === 'f2' ? p.q10_start_photo : Object.keys(p.answers || {}).length;
-  if (started && !confirm(p.stage === 'f2' && p.q10_start_photo ? 'Leave the count? It stays saved on this phone – come back to finish it.' : 'Leave? Your answers stay saved on this phone until you start another one.')) return;
-  clearInterval(q10Timer); stopGeo(); S.pr = null; S.view = 'prospects'; render();
+  const started = p.stage === 'f1' ? (p.shop_name || p.front_photo) : p.stage === 'f2' ? p.q10_footfall : Object.keys(p.answers || {}).length;
+  if (started && !confirm('Leave? Your answers stay saved on this phone until you start another one.')) return;
+  stopGeo(); S.pr = null; S.view = 'prospects'; render();
 }
 async function saveProspect() {
   const m = prValidate();
@@ -321,17 +290,16 @@ async function saveProspect() {
     payload = {prospect_id: p.prospect_id, stage: 'f1', shop_name: p.shop_name.trim(), owner_name: p.owner_name.trim(), owner_mobile: p.owner_mobile, address: p.address.trim(), pincode: p.pincode, gstin: p.gstin, gps: g.lat.toFixed(6) + ', ' + g.lng.toFixed(6), gps_accuracy: g.accuracy, front_photo: p.front_photo, q2_photo: f1Stop(a) ? '' : p.q2_photo, answers: ans, stop: f1Stop(a), saved_at: new Date().toISOString()};
     label = 'New shop – ' + payload.shop_name + ' (Q1–Q9)';
   } else if (p.stage === 'f2') {
-    if (!(S.data && S.data.test)) { const s = new Date(p.q10_start_at), e = new Date(p.q10_end_at); if (e - s < 15 * 60000 - 5000) { toast('The count must run 15 minutes'); return; } }
-    payload = {prospect_id: p.prospect_id, stage: 'f2', q10_footfall: Number(p.q10_footfall), q10_start_at: p.q10_start_at, q10_end_at: p.q10_end_at, q10_start_photo: p.q10_start_photo, q10_end_photo: p.q10_end_photo, saved_at: new Date().toISOString()};
+    payload = {prospect_id: p.prospect_id, stage: 'f2', q10_footfall: Number(p.q10_footfall), saved_at: new Date().toISOString()};
     label = p.shop_name + ' – footfall ' + p.q10_footfall + ' (Q10)';
   } else {
     if (!confirm('Save the owner answers? They cannot be changed afterwards.')) return;
     const ans = {}; visibleQs(F3Q, a, f3Stop).forEach(k => { ans[k] = a[k]; });
-    payload = {prospect_id: p.prospect_id, stage: 'f3', answers: ans, products: f3Stop(a) ? [] : p.products.slice(), q12_licence_photo: a.q12_checks === 'Yes' ? p.q12_licence_photo : '', q12_stamp_photo: a.q12_checks === 'Yes' ? p.q12_stamp_photo : '', saved_at: new Date().toISOString()};
+    payload = {prospect_id: p.prospect_id, stage: 'f3', answers: ans, products: f3Stop(a) ? [] : p.products.slice(), saved_at: new Date().toISOString()};
     label = p.shop_name + ' – owner answers (Q11–Q17)';
   }
   await ffOutboxPut({id: p.prospect_id + '.' + p.stage, type: 'prospect', payload: payload, created: Date.now(), label: label});
-  clearInterval(q10Timer); stopGeo();
+  stopGeo();
   await ffSet('prDraft', null); S.pr = null;
   await refreshOutbox(); toast('Saved ✓'); S.view = 'prospects'; render(); syncNow();
 }

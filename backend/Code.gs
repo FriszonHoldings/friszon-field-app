@@ -1,4 +1,4 @@
-const API_VERSION = '1.8.0';
+const API_VERSION = '1.8.1';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -409,7 +409,6 @@ const PROSPECT_OPTS_ = {
 };
 const F1_Q_ = ['q1_premium_section', 'q2_premium_products', 'q3_crowded_shelf', 'q4_storage', 'q5_shopper_match', 'q6_fresh_items', 'q7_catchment', 'q8_community', 'q9_shop_type'];
 const F3_Q_ = ['q11_terms', 'q12_checks', 'q13_shelf', 'q14_owner', 'q15_reliability', 'q16_linked_to_rep', 'q17_opening_order'];
-const PROSPECT_EXTRA_COLS_ = ['q10_start_at', 'q10_end_at', 'q10_start_photo', 'q10_end_photo', 'q12_licence_photo', 'q12_stamp_photo'];
 
 function f1Stop_(a) {
   return a.q1_premium_section === 'No' || a.q2_premium_products === '0 or 1' || a.q4_storage === 'Sunlight heat damp or pests';
@@ -428,23 +427,11 @@ function checkAnswers_(a, keys, stopFn) {
   return '';
 }
 
-function q10WindowOk_(startIso, endIso) {
-  const s = new Date(startIso), e = new Date(endIso);
-  if (isNaN(s) || isNaN(e)) return 'start and end time missing';
-  if (e - s < 15 * 60000 - 5000) return 'count must run for 15 minutes';
-  if (e - s > 60 * 60000) return 'count took over an hour - start again';
-  const dow = Number(Utilities.formatDate(s, TZ, 'u'));
-  const mins = Number(Utilities.formatDate(s, TZ, 'H')) * 60 + Number(Utilities.formatDate(s, TZ, 'm'));
-  if (dow === 7) return 'count on a working day (Monday to Saturday)';
-  if (mins < 18 * 60 || mins > 19 * 60 + 45) return 'count must start between 6:00 and 7:45 pm';
-  return '';
-}
-
 function saveProspect_(rep, p) {
   if (!p || !p.prospect_id || ['f1', 'f2', 'f3'].indexOf(p.stage) < 0) return {ok: false, error: 'bad_prospect', detail: 'missing id or stage'};
   const ss = ss_();
   const sh = sheet_(ss, rep, 'APP_Prospects');
-  const head0 = ensureCols_(sh, PROSPECT_EXTRA_COLS_);
+  const head0 = headOf_(sh);
   const a = p.answers || {};
   const photoCol = (col) => photoPath_(rep, 'APP_Prospects_Images', p.prospect_id, col);
   if (p.stage === 'f1') {
@@ -496,16 +483,12 @@ function saveProspect_(rep, p) {
     if (p.stage === 'f2') {
       if (cur.q10_footfall !== '') return {ok: true, duplicate: true};
       if (!nonNegInt_(p.q10_footfall) || Number(p.q10_footfall) > 500) return {ok: false, error: 'bad_prospect', detail: 'footfall count'};
-      const werr = rep.test ? '' : q10WindowOk_(p.q10_start_at, p.q10_end_at);
-      if (werr) return {ok: false, error: 'bad_prospect', detail: werr};
-      if (!p.q10_start_photo || !p.q10_end_photo) return {ok: false, error: 'bad_prospect', detail: 'start and end photos'};
-      Object.assign(set, {q10_footfall: Number(p.q10_footfall), q10_start_at: new Date(p.q10_start_at), q10_end_at: new Date(p.q10_end_at), q10_start_photo: photoCol('q10_start_photo'), q10_end_photo: photoCol('q10_end_photo')});
+      set.q10_footfall = Number(p.q10_footfall);
     } else {
       if (cur.q11_terms !== '') return {ok: true, duplicate: true};
       if (!rep.test && String(cur.result).indexOf('GO - meet the owner') < 0) return {ok: false, error: 'bad_prospect', detail: 'owner questions open only after GO'};
       const err = checkAnswers_(a, F3_Q_, f3Stop_);
       if (err) return {ok: false, error: 'bad_prospect', detail: err};
-      if (a.q12_checks === 'Yes' && (!p.q12_licence_photo || !p.q12_stamp_photo)) return {ok: false, error: 'bad_prospect', detail: 'licence and stamp photos'};
       const skus = activeSkus_(ss);
       const prods = (p.products || []).map(s => String(s).toUpperCase()).filter((s, i, arr) => skus.indexOf(s) > -1 && arr.indexOf(s) === i);
       if (!f3Stop_(a)) {
@@ -514,8 +497,6 @@ function saveProspect_(rep, p) {
       }
       F3_Q_.forEach(k => { set[k] = a[k] || ''; });
       set.products = prods.join(' , ');
-      if (p.q12_licence_photo) set.q12_licence_photo = photoCol('q12_licence_photo');
-      if (p.q12_stamp_photo) set.q12_stamp_photo = photoCol('q12_stamp_photo');
     }
     Object.keys(set).forEach(k => { const c = ci(k); if (c > -1) sh.getRange(r + 1, c + 1).setValue(set[k]); });
   } finally {
@@ -526,7 +507,7 @@ function saveProspect_(rep, p) {
 }
 
 function prospectPhotos_(rep, p) {
-  ['front_photo', 'q2_photo', 'q10_start_photo', 'q10_end_photo', 'q12_licence_photo', 'q12_stamp_photo'].forEach(c => { if (p[c]) savePhoto_('APP_Prospects_Images', p.prospect_id, c, p[c], rep); });
+  ['front_photo', 'q2_photo'].forEach(c => { if (p[c]) savePhoto_('APP_Prospects_Images', p.prospect_id, c, p[c], rep); });
 }
 
 function folder_(name) {
