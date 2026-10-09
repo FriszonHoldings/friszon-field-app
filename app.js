@@ -1,4 +1,4 @@
-const APP_VERSION = '0.3.2';
+const APP_VERSION = '0.3.3';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -16,7 +16,15 @@ function uid() { const a = new Uint8Array(4); crypto.getRandomValues(a); return 
 function todayKey(d) { const x = d ? new Date(d) : new Date(); return x.toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'}); }
 function daysSince(iso) { if (!iso) return Infinity; const a = new Date(todayKey() + 'T00:00:00+05:30'); const b = new Date(todayKey(iso) + 'T00:00:00+05:30'); return Math.round((a - b) / 86400000); }
 function money(n) { return '₹' + (Math.round(Number(n) * 100) / 100).toLocaleString('en-IN'); }
-function productName(sku) { const p = (S.data && S.data.products || []).find(x => x.sku === sku); return p ? p.name + (p.pack ? ' (' + p.pack + ')' : '') : sku; }
+const READY_SKUS = ['VATHAL', 'MOR', 'WSAMBAR', 'AVIAL'];
+function productName(sku) {
+  const p = (S.data && S.data.products || []).find(x => x.sku === sku);
+  if (!p) return sku;
+  let pack = p.pack;
+  const shop = S.form && S.data ? (S.data.shops || []).find(x => x.shop_id === S.form.shop_id) : null;
+  if (shop && shop.pack_size && pack === '50g' && READY_SKUS.indexOf(sku) < 0) pack = shop.pack_size + 'g';
+  return p.name + (pack ? ' (' + pack + ')' : '');
+}
 
 function toast(msg, ms) { S.toast = msg; renderToast(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = ''; renderToast(); }, ms || 3000); }
 function renderToast() { let el = document.getElementById('toast'); if (!S.toast) { if (el) el.remove(); return; } if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); } el.textContent = S.toast; }
@@ -389,12 +397,12 @@ function renderVisit(keepScroll) {
   let h = `<header class="top"${S.data.test ? ' style="background:#8a5a00"' : ''}><button onclick="cancelVisit()">←</button><h1>${esc(shop.shop_name)}</h1><span id="sync-status" class="status"></span></header><main>`;
   h += `<div class="card"><div class="small">${esc(shop.shop_id)}${t.amount_due ? ' · amount due ' + money(t.amount_due) : ''}</div><div class="small">${esc(t.refill_plan || '')}</div>${flags}<div class="small" id="geo" style="margin-top:8px">${geoText()}</div></div>`;
   h += `<div class="card"><h2>Packs on the shelf now</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('count', sku, f.count[sku])}</div>`).join('')}
-    ${others.length ? `<label class="field">Shop now keeps another product?</label><select onchange="addProduct(this.value)"><option value="">+ Add a product</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(p.name)}${p.pack ? ' (' + esc(p.pack) + ')' : ''}</option>`).join('')}</select>` : ''}
+    ${others.length ? `<label class="field">Shop now keeps another product?</label><select onchange="addProduct(this.value)"><option value="">+ Add a product</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(productName(p.sku))}</option>`).join('')}</select>` : ''}
     <div id="countcheck">${countCheckHtml(f)}</div></div>`;
   h += `<div class="card"><h2>What happened at this visit?</h2><div class="choices">${ACTIONS.map(a => `<button class="${has(f, a) ? 'on' : ''}" onclick="toggleWhat('${a}')">${a}</button>`).join('')}</div></div>`;
   if (has(f, 'Refilled')) {
     h += `<div class="card"><h2>Refill – packs added</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}${f.add_products.indexOf(sku) > -1 ? '<small>New for this shop</small>' : ''}</div>${stepper('refill', sku, f.refill[sku])}</div>`).join('')}
-      ${others.length ? `<label class="field">Refilling a product this shop never had?</label><select onchange="addProduct(this.value, true)"><option value="">+ Add a new product to refill</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(p.name)}${p.pack ? ' (' + esc(p.pack) + ')' : ''}</option>`).join('')}</select>` : ''}`;
+      ${others.length ? `<label class="field">Refilling a product this shop never had?</label><select onchange="addProduct(this.value, true)"><option value="">+ Add a new product to refill</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(productName(p.sku))}</option>`).join('')}</select>` : ''}`;
     if (!has(f, 'Payment collected') && t.payment_overdue) h += `<div class="err">This shop owes ${money(t.amount_due)} unpaid for 60+ days. Collect first.</div><label class="check"><input type="checkbox" ${f.refill_override ? 'checked' : ''} onchange="setF('refill_override',this.checked)"> My Reporting Manager approved this refill</label>`;
     h += `</div>`;
   }

@@ -1,4 +1,4 @@
-const API_VERSION = '1.5.0';
+const API_VERSION = '1.6.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
@@ -181,6 +181,10 @@ function bootstrap_(rep) {
       products: list_(s.products_stocked), owner_name: String(s.owner_name || ''),
       owner_mobile: String(s.owner_mobile || ''), pincode: String(s.pincode || '')
     }));
+  const sizeOf = {};
+  const cfgSh = ss.getSheetByName('SHOP_Config');
+  if (cfgSh) table_(cfgSh).rows.forEach(c => { sizeOf[String(c.shop_id).trim()] = Number(c.pack_size) || 50; });
+  shops.forEach(s => { s.pack_size = sizeOf[s.shop_id] || 50; });
   const myShopIds = {};
   shops.forEach(s => { myShopIds[s.shop_id] = true; });
   const today = table_(ss.getSheetByName('APP_Today')).rows
