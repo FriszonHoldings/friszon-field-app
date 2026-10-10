@@ -39,7 +39,7 @@ main { padding: 12px 12px 120px; max-width: 640px; margin: 0 auto; }
 .row .label small { display: block; color: var(--muted); }
 .stepper { display: flex; align-items: center; gap: 6px; }
 .stepper button { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 20px; }
-.stepper input { width: 60px; height: 40px; text-align: center; border: 1px solid var(--line); border-radius: 10px; font-size: 18px; }
+.stepper input { width: 84px; height: 44px; text-align: center; border: 1px solid var(--line); border-radius: 10px; font-size: 18px; }
 .stepper input.blank { background: var(--amber-soft); }
 .choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .choices button { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 10px 14px; }

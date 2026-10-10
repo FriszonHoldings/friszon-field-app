@@ -254,7 +254,7 @@ function renderProspect(keep) {
     h += `</div>`;
   } else if (p.stage === 'f2') {
     h += `<div class="card"><h2>Q10 · Footfall count</h2><div class="small">Working day, 6–8 pm. Stand where you can see the entrance and count every adult customer who walks in for 15 minutes. Do NOT count staff, delivery people, children, people coming back in, or passers-by. Count – never estimate.</div>
-      <div class="row" style="margin-top:8px"><div class="label">Adults who walked in</div><div class="stepper"><button onclick="q10Step(-1)">−</button><input inputmode="numeric" value="${esc(p.q10_footfall)}" oninput="prSet('q10_footfall',this.value.replace(/[^0-9]/g,''))" id="q10n"><button onclick="q10Step(1)">+</button></div></div>
+      <div class="row" style="margin-top:8px"><div class="label">Adults who walked in</div><div class="stepper"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${esc(p.q10_footfall)}" oninput="this.value=this.value.replace(/[^0-9]/g,'');prSet('q10_footfall',this.value)" id="q10n"></div></div>
       <button class="btn ghost" style="font-size:22px;padding:22px;margin-top:8px" onclick="q10Step(1)">+1 customer walked in</button></div>`;
   } else {
     h += `<div class="card"><h2>Meet the owner – Q11 to Q17</h2><div class="small">Explain each point in plain words. Never offer anything extra to get a Yes.</div>`;

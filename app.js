@@ -1,4 +1,4 @@
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.6.1';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -635,7 +635,7 @@ function validate(f) {
 
 function stepper(key, sku, val) {
   const blank = val === '' || val === undefined;
-  return `<div class="stepper"><button onclick="step('${key}','${sku}',-1)">−</button><input inputmode="numeric" class="${blank ? 'blank' : ''}" value="${blank ? '' : esc(val)}" oninput="setNum('${key}','${sku}',this.value)"><button onclick="step('${key}','${sku}',1)">+</button></div>`;
+  return `<div class="stepper"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="0" class="${blank ? 'blank' : ''}" value="${blank ? '' : esc(val)}" oninput="this.value=this.value.replace(/[^0-9]/g,'');this.classList.toggle('blank',this.value==='');setNum('${key}','${sku}',this.value)"></div>`;
 }
 function step(key, sku, d) { const f = S.form; const cur = key === 'asked' ? f.asked_by_name : f[key][sku]; let n = (cur === '' || cur === undefined ? 0 : Number(cur)) + d; if (cur === '' || cur === undefined) n = Math.max(0, d > 0 ? 1 : 0); n = Math.max(0, n); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); renderVisit(true); }
 function setNum(key, sku, v) { const f = S.form; const val = v.replace(/[^0-9]/g, ''); const n = val === '' ? '' : Number(val); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); if (key === 'count') { const el = document.getElementById('countcheck'); if (el) el.innerHTML = countCheckHtml(f); } if (key === 'deliver') { const el = document.getElementById('deliverstatus'); if (el) el.innerHTML = deliverStatusHtml(f); const pl = document.getElementById('placecard'); if (pl) pl.innerHTML = placeCardHtml(f); } updateMissing(); }
