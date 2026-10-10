@@ -1,4 +1,4 @@
-const APP_VERSION = '0.5.1';
+const APP_VERSION = '0.6.0';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -7,6 +7,9 @@ const TAKEBACK_REASONS = ['Near expiry', 'Damaged', 'Shop leaving'];
 const NOT_COLLECTED = ['Owner not there', 'Owner refused', 'Owner asked for time', 'Other'];
 const ISSUES = ['None', 'Damage', 'Near expiry', 'Dispute', 'Shop closing', 'Competitor offer', 'Other'];
 const BALANCE_REASONS = ['To be collected later', 'Stock returned', 'Stock expired'];
+const ORDER_REASONS = ['Out of stock with me', 'Shop cancelled the order', 'Shop reduced the order', 'Other'];
+const PLACE_REASONS = ['Owner refused', 'No space at eye or hand level', 'Other'];
+const PLACE_QS = [['eye', 'All Friszon packs at eye or hand level', 'eye or hand level'], ['block', 'All Friszon packs together in one block, facing front', 'one block'], ['strip', 'Friszon shelf strip in place and visible', 'shelf strip']];
 
 const LIST_VIEWS = ['due', 'all', 'sent', 'menu', 'stock', 'prospects'];
 const S = {session: null, data: null, view: 'due', search: '', form: null, outbox: [], toast: '', geo: null, geoWatch: null};
@@ -26,6 +29,24 @@ function productName(sku) {
   if (shop && shop.pack_size && pack === '50g' && READY_SKUS.indexOf(sku) < 0) pack = shop.pack_size + 'g';
   return p.name + (pack ? ' (' + pack + ')' : '');
 }
+
+function parseOrder(v) {
+  const o = {};
+  String(v || '').split(',').forEach(part => { const m = part.trim().match(/^([A-Z0-9]+)\s*:\s*(\d+)$/i); if (m && Number(m[2]) > 0) o[m[1].toUpperCase()] = (o[m[1].toUpperCase()] || 0) + Number(m[2]); });
+  return o;
+}
+function orderText(o) { return Object.keys(o || {}).filter(k => Number(o[k]) > 0).map(k => k + ':' + Number(o[k])).join(' , '); }
+function refilledIn(fl) { return Object.keys(fl || {}).some(k => /^refill_/.test(k) && k !== 'refill_override' && Number(fl[k]) > 0); }
+function prevVisit(shopId) {
+  const c = [];
+  const sv = S.data && S.data.last && S.data.last[shopId];
+  if (sv) c.push({visit_id: sv.visit_id || '', visit_time: sv.visit_time, refilled: !!sv.refilled, order: sv.order || {}});
+  (S.sentLog || []).filter(x => x.type === 'visit' && x.shop_id === shopId && x.visit_time && (x.order_lines !== undefined || x.refilled !== undefined)).slice(0, 1).forEach(x => c.push({visit_id: x.id, visit_time: x.visit_time, refilled: !!x.refilled, order: parseOrder(x.order_lines)}));
+  S.outbox.filter(o => o.type === 'visit' && o.payload.shop_id === shopId).forEach(o => c.push({visit_id: o.payload.visit_id, visit_time: o.payload.visit_time, refilled: refilledIn(o.payload.fields), order: parseOrder(o.payload.fields.order_lines)}));
+  const t = x => new Date(x.visit_time || 0).getTime() || 0;
+  return c.sort((a, b) => t(b) - t(a))[0] || null;
+}
+function hasKeys(o) { return !!o && Object.keys(o).length > 0; }
 
 function toast(msg, ms) { S.toast = msg; renderToast(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = ''; renderToast(); }, ms || 3000); }
 function renderToast() { let el = document.getElementById('toast'); if (!S.toast) { if (el) el.remove(); return; } if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); } el.textContent = S.toast; }
@@ -141,8 +162,10 @@ function shopRows() {
   return d.shops.filter(s => s.status === 'Active').map(s => {
     const t = todayBy[s.shop_id] || {};
     const days = daysSince(t.last_visit);
-    const due = !visited[s.shop_id] && (!t.last_visit || days >= DUE_DAYS || /Collect/.test(t.flag || ''));
-    return Object.assign({}, s, {t: t, days: days, due: due, visitedToday: !!visited[s.shop_id]});
+    const pv = prevVisit(s.shop_id);
+    const orderDue = !visited[s.shop_id] && !!pv && hasKeys(pv.order);
+    const due = !visited[s.shop_id] && (!t.last_visit || days >= DUE_DAYS || /Collect/.test(t.flag || '') || orderDue);
+    return Object.assign({}, s, {t: t, days: days, due: due, orderDue: orderDue, visitedToday: !!visited[s.shop_id]});
   });
 }
 
@@ -191,7 +214,7 @@ function renderList(dueOnly) {
   const list = rows.map(r => {
     const flags = (r.t.flag || '').split('|').map(x => x.trim()).filter(Boolean);
     const chips = flags.map(f => `<span class="chip ${/Collect|overdue/i.test(f) ? 'red' : /confirmation|10\+/.test(f) ? 'amber' : ''}">${esc(f)}</span>`).join('');
-    const done = r.visitedToday ? '<span class="chip">Visited today</span>' : '';
+    const done = (r.orderDue ? '<span class="chip red">Deliver order</span>' : '') + (r.visitedToday ? '<span class="chip">Visited today</span>' : '');
     return `<button class="shop" onclick="openVisit('${esc(r.shop_id)}')"><div class="name">${esc(r.shop_name)}</div><div class="meta">${esc(r.shop_id)} · ${r.t.last_visit ? 'last visit ' + (r.days === 0 ? 'today' : r.days + ' days ago') : 'never visited'}${r.t.amount_due ? ' · due ' + money(r.t.amount_due) : ''}</div><div class="meta">${esc(r.t.refill_plan || '')}</div>${chips}${done}</button>`;
   }).join('');
   return `<input class="search" placeholder="Search shop" value="${esc(S.search)}" oninput="S.search=this.value;document.getElementById('list').innerHTML=renderListInner(${dueOnly})">
@@ -467,12 +490,16 @@ function geoText(err) { return S.geo ? `📍 Location found (±${S.geo.accuracy}
 function openVisit(shopId) {
   S.showAllMissing = false;
   const shop = S.data.shops.find(s => s.shop_id === shopId);
+  const pv = prevVisit(shopId);
   S.form = {
     visit_id: uid(), shop_id: shopId, opened_at: new Date().toISOString(), products: shop.products.slice(), add_products: [],
     count: {}, refill: {}, takeback: {}, what: [], takeback_reason: '', pay_mode: '', amount: '', utr: '', cheque_no: '', cheque_date: '',
     lines: {}, not_collected_reason: '', slip_no: '', slip_photo: '', shelf_photo: '', asked_by_name: '', issue: 'None', issue_note: '',
-    count_override: false, refill_override: false
+    count_override: false, refill_override: false,
+    prev: pv ? {visit_id: pv.visit_id, visit_time: pv.visit_time, refilled: !!pv.refilled, order: pv.order || {}} : null,
+    order_on: false, order: {}, order_reason: '', order_note: '', place: {eye: '', block: '', strip: ''}, place_reason: '', place_note: ''
   };
+  if (pv && hasKeys(pv.order)) Object.keys(pv.order).forEach(sku => { if (S.form.products.indexOf(sku) < 0) { S.form.products.push(sku); S.form.add_products.push(sku); } });
   S.view = 'visit'; saveDraft(); startGeo(); render(); window.scrollTo(0, 0);
 }
 
@@ -482,6 +509,17 @@ function saveDraft() { clearTimeout(draftTimer); draftTimer = setTimeout(() => f
 function shopOf(f) { return S.data.shops.find(s => s.shop_id === f.shop_id) || {}; }
 function todayOf(f) { return (S.data.today || []).find(t => t.shop_id === f.shop_id) || {}; }
 function has(f, a) { return f.what.indexOf(a) > -1; }
+function pendingOrder(f) { return f.prev && hasKeys(f.prev.order) ? f.prev.order : null; }
+function delivered(f, sku) { return has(f, 'Refilled') ? (Number(f.refill[sku]) || 0) : 0; }
+function orderShort(f) { const o = pendingOrder(f); return o ? Object.keys(o).filter(sku => delivered(f, sku) < o[sku]) : []; }
+function orderResult(f) {
+  const o = pendingOrder(f); if (!o) return '';
+  if (!orderShort(f).length) return 'Delivered in full';
+  return Object.keys(o).some(sku => delivered(f, sku) > 0) ? 'Part delivered' : 'Not delivered';
+}
+function placeNeeded(f) { return !!(f.prev && f.prev.refilled); }
+function placeBad(f) { return placeNeeded(f) && (f.place.eye === 'No' || f.place.block === 'No' || f.place.strip === 'No'); }
+function newOrder(f) { const o = {}; if (f.order_on) f.products.forEach(sku => { if (Number(f.order[sku]) > 0) o[sku] = Number(f.order[sku]); }); return o; }
 function slipNeeded(f) { return SLIP_ACTIONS.some(a => has(f, a)) || (has(f, 'Payment collected') && (f.pay_mode === 'Cash' || f.pay_mode === 'Cheque')); }
 function openInvoices(f) {
   const pending = {};
@@ -552,6 +590,18 @@ function validate(f) {
     }
     if (!f.slip_photo) m.push('Photo of the signed slip');
   }
+  if (pendingOrder(f) && orderShort(f).length) {
+    if (!f.order_reason) m.push('Why the order was not delivered in full');
+    else if (f.order_reason === 'Other' && !String(f.order_note || '').trim()) m.push('Describe why the order was not delivered');
+  }
+  if (f.order_on && !hasKeys(newOrder(f))) m.push('Order for next visit – quantity for at least one product (or untick it)');
+  if (placeNeeded(f)) {
+    PLACE_QS.forEach(([k, q, short]) => { if (!f.place[k]) m.push('Shelf placement – ' + short); });
+    if (placeBad(f)) {
+      if (!f.place_reason) m.push('Why the shelf placement is not right');
+      else if (f.place_reason === 'Other' && !String(f.place_note || '').trim()) m.push('Describe the shelf placement problem');
+    }
+  }
   if (!f.shelf_photo) m.push('Shelf photo');
   if (f.asked_by_name === '' || f.asked_by_name === undefined) m.push('Customers who asked for Friszon by name (0 if none)');
   if (f.issue && f.issue !== 'None' && !f.issue_note.trim()) m.push('Describe the issue');
@@ -565,7 +615,13 @@ function stepper(key, sku, val) {
   return `<div class="stepper"><button onclick="step('${key}','${sku}',-1)">−</button><input inputmode="numeric" class="${blank ? 'blank' : ''}" value="${blank ? '' : esc(val)}" oninput="setNum('${key}','${sku}',this.value)"><button onclick="step('${key}','${sku}',1)">+</button></div>`;
 }
 function step(key, sku, d) { const f = S.form; const cur = key === 'asked' ? f.asked_by_name : f[key][sku]; let n = (cur === '' || cur === undefined ? 0 : Number(cur)) + d; if (cur === '' || cur === undefined) n = Math.max(0, d > 0 ? 1 : 0); n = Math.max(0, n); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); renderVisit(true); }
-function setNum(key, sku, v) { const f = S.form; const val = v.replace(/[^0-9]/g, ''); const n = val === '' ? '' : Number(val); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); if (key === 'count') { const el = document.getElementById('countcheck'); if (el) el.innerHTML = countCheckHtml(f); } updateMissing(); }
+function setNum(key, sku, v) { const f = S.form; const val = v.replace(/[^0-9]/g, ''); const n = val === '' ? '' : Number(val); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); if (key === 'count') { const el = document.getElementById('countcheck'); if (el) el.innerHTML = countCheckHtml(f); } if (key === 'refill') { const el = document.getElementById('orderstatus'); if (el) el.innerHTML = orderStatusHtml(f); } updateMissing(); }
+function setOrderReason(v) {
+  const f = S.form; f.order_reason = v;
+  if (v === 'Out of stock with me') { const o = pendingOrder(f); f.order_on = true; orderShort(f).forEach(sku => { if (!(Number(f.order[sku]) > 0)) f.order[sku] = o[sku] - delivered(f, sku); }); }
+  saveDraft(); renderVisit(true);
+}
+function setPlace(k, v) { S.form.place[k] = v; saveDraft(); renderVisit(true); }
 function setF(k, v) { S.form[k] = v; saveDraft(); renderVisit(true); }
 function setFQuiet(k, v) { S.form[k] = v; saveDraft(); updateMissing(); }
 function toggleWhat(a) { const f = S.form; const i = f.what.indexOf(a); if (i > -1) f.what.splice(i, 1); else { if (a === 'Count only') f.what = []; else f.what = f.what.filter(x => x !== 'Count only'); f.what.push(a); } saveDraft(); renderVisit(true); }
@@ -607,11 +663,14 @@ function updateMissing() { const el = document.getElementById('missing'); if (!e
 function renderVisit(keepScroll) {
   const y = window.scrollY;
   const f = S.form, shop = shopOf(f), t = todayOf(f);
+  if (!f.order) f.order = {};
+  if (!f.place) f.place = {eye: '', block: '', strip: ''};
   const others = (S.data.products || []).filter(p => f.products.indexOf(p.sku) < 0);
   const flags = (t.flag || '').split('|').map(x => x.trim()).filter(Boolean).map(x => `<span class="chip ${/Collect|overdue/i.test(x) ? 'red' : 'amber'}">${esc(x)}</span>`).join('');
   const inv = has(f, 'Payment collected') ? openInvoices(f) : [];
   let h = `<header class="top"${S.data.test ? ' style="background:#8a5a00"' : ''}><button onclick="cancelVisit()">←</button><h1>${esc(shop.shop_name)}</h1><span id="sync-status" class="status"></span></header><main>`;
   h += `<div class="card"><div class="small">${esc(shop.shop_id)}${t.amount_due ? ' · amount due ' + money(t.amount_due) : ''}</div><div class="small">${esc(t.refill_plan || '')}</div>${flags}<div class="small" id="geo" style="margin-top:8px">${geoText()}</div></div>`;
+  if (pendingOrder(f)) h += `<div class="card" style="border-left:4px solid var(--red)"><h2>Order to deliver today</h2><div class="small">Taken on ${new Date(f.prev.visit_time).toLocaleDateString('en-IN', {day: 'numeric', month: 'short'})}. Tick <b>Refilled</b> below and enter these packs.</div><div id="orderstatus">${orderStatusHtml(f)}</div></div>`;
   h += `<div class="card"><h2>Packs on the shelf now</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('count', sku, f.count[sku])}</div>`).join('')}
     ${others.length ? `<label class="field">Shop now keeps another product?</label><select onchange="addProduct(this.value)"><option value="">+ Add a product</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(productName(p.sku))}</option>`).join('')}</select>` : ''}
     <div id="countcheck">${countCheckHtml(f)}</div></div>`;
@@ -626,6 +685,7 @@ function renderVisit(keepScroll) {
     h += `<div class="card"><h2>Packs taken back</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('takeback', sku, f.takeback[sku])}</div>`).join('')}
       <label class="field">Why taken back?</label><select onchange="setF('takeback_reason',this.value)"><option value="">Choose</option>${TAKEBACK_REASONS.map(r => `<option ${f.takeback_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>`;
   }
+  h += `<div class="card"><h2>Order for next visit</h2><label class="check"><input type="checkbox" ${f.order_on ? 'checked' : ''} onchange="setF('order_on',this.checked)"> The shop gave an order I could not supply today</label>${f.order_on ? f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('order', sku, f.order[sku])}</div>`).join('') + '<div class="small">Deliver it at your next visit to this shop. No invoice until it is delivered.</div>' : ''}</div>`;
   if (has(f, 'Payment collected')) {
     h += `<div class="card"><h2>Payment collected</h2><div class="choices">${PAY_MODES.map(p => `<button class="${f.pay_mode === p ? 'on' : ''}" onclick="setF('pay_mode','${p}')">${p}</button>`).join('')}</div>
       <label class="field">Amount collected (₹)</label><input class="text" inputmode="decimal" value="${esc(f.amount)}" oninput="setFQuiet('amount',this.value.replace(/[^0-9.]/g,''))">`;
@@ -641,6 +701,11 @@ function renderVisit(keepScroll) {
     h += `<div class="card"><h2>Slip</h2>${myPads().length ? '' : '<div class="err">No slip pad recorded for you yet. Add your pad from the ☰ menu first.</div>'}<label class="field">Slip number (from your pad)</label><input class="text" inputmode="numeric" value="${esc(f.slip_no)}" oninput="setFQuiet('slip_no',this.value.replace(/[^0-9]/g,''))">
       <label class="field">Photo of the signed slip</label>${photoBlock('slip_photo')}</div>`;
   }
+  if (placeNeeded(f)) {
+    h += `<div class="card"><h2>Shelf placement</h2><div class="small">You refilled this shop on ${new Date(f.prev.visit_time).toLocaleDateString('en-IN', {day: 'numeric', month: 'short'})}. Arrange the shelf first, then answer for how it is now.</div>${PLACE_QS.map(([k, q]) => `<label class="field">${q}?</label><div class="choices">${(k === 'strip' ? ['Yes', 'No', 'No strip issued yet'] : ['Yes', 'No']).map(a => `<button class="${f.place[k] === a ? 'on' : ''}" onclick="setPlace('${k}','${a}')">${a}</button>`).join('')}</div>`).join('')}`;
+    if (placeBad(f)) h += `<label class="field">Why is it not right?</label><select onchange="setF('place_reason',this.value)"><option value="">Choose</option>${PLACE_REASONS.map(r => `<option ${f.place_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>${f.place_reason === 'Other' ? `<label class="field">Describe the problem</label><textarea oninput="setFQuiet('place_note',this.value)">${esc(f.place_note)}</textarea>` : ''}`;
+    h += `<div class="small" style="margin-top:8px">The shelf photo below must show it.</div></div>`;
+  }
   h += `<div class="card"><h2>Shelf photo</h2><div class="small">All Friszon packs visible.</div><br>${photoBlock('shelf_photo')}</div>`;
   h += `<div class="card"><div class="row"><div class="label">Customers who asked for Friszon by name</div>${stepper('asked', '', f.asked_by_name)}</div>
     <label class="field">Any issue at this shop?</label><select onchange="setF('issue',this.value)">${ISSUES.map(r => `<option ${f.issue === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
@@ -650,6 +715,15 @@ function renderVisit(keepScroll) {
   renderHeaderStatus();
   updateMissing();
   if (keepScroll) window.scrollTo(0, y);
+}
+
+function orderStatusHtml(f) {
+  const o = pendingOrder(f); if (!o) return '';
+  let h = Object.keys(o).map(sku => { const d = delivered(f, sku); return `<div class="row"><div class="label">${esc(productName(sku))}</div><b style="color:${d >= o[sku] ? 'var(--green, #2f5d34)' : 'var(--red)'}">${d} of ${o[sku]}</b></div>`; }).join('');
+  const short = orderShort(f);
+  if (short.length) h += `<label class="field">Why is the order not delivered in full?</label><select onchange="setOrderReason(this.value)"><option value="">Choose</option>${ORDER_REASONS.map(r => `<option ${f.order_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>${f.order_reason === 'Other' ? `<label class="field">Describe why</label><textarea oninput="setFQuiet('order_note',this.value)">${esc(f.order_note)}</textarea>` : ''}${f.order_reason === 'Out of stock with me' ? '<div class="small">The rest is carried into "Order for next visit" below.</div>' : ''}`;
+  else h += '<div class="small" style="color:var(--green, #2f5d34)">Order delivered in full ✓</div>';
+  return h;
 }
 
 function countCheckHtml(f) {
@@ -693,6 +767,18 @@ async function saveVisit() {
   fields.issue_note = f.issue !== 'None' ? f.issue_note : '';
   fields.count_override = !!f.count_override && countTooHigh(f).length > 0;
   fields.refill_override = !!f.refill_override;
+  const po = pendingOrder(f), short = orderShort(f);
+  fields.order_lines = orderText(newOrder(f));
+  fields.order_ref = po ? f.prev.visit_id : '';
+  fields.order_was = po ? orderText(po) : '';
+  fields.order_result = orderResult(f);
+  fields.order_reason = po && short.length ? f.order_reason + (f.order_reason === 'Other' ? ': ' + String(f.order_note).trim() : '') : '';
+  const pn = placeNeeded(f);
+  fields.place_ref = pn ? f.prev.visit_id : '';
+  fields.place_eye_level = pn ? f.place.eye : '';
+  fields.place_one_block = pn ? f.place.block : '';
+  fields.place_strip = pn ? f.place.strip : '';
+  fields.place_reason = placeBad(f) ? f.place_reason + (f.place_reason === 'Other' ? ': ' + String(f.place_note).trim() : '') : '';
   const lines = paid ? Object.keys(f.lines).map(k => f.lines[k]).filter(l => Number(l.amount) > 0).map(l => ({invoice_no: l.invoice_no, amount: Number(l.amount), balance_reason: l.balance_reason || ''})) : [];
   const g = S.geo;
   const payload = {
