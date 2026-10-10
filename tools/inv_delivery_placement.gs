@@ -7,6 +7,8 @@ function deliveryPlacementFlags_(o) {
   const byId = {};
   o.visits.forEach(v => { byId[String(v.visit_id)] = v; });
   const shop = v => o.esc(o.name[v.shop_id] || v.shop_id);
+  const invOf = {};
+  (o.ilog || []).forEach(l => { if (String(l.doc_type) === 'INV' && String(l.status) === 'OK') (invOf[String(l.visit_id)] = invOf[String(l.visit_id)] || []).push(String(l.doc_no)); });
   const nextVisit = [];
   o.visits.filter(v => o.low(v.rep_email) === o.e && o.dk(v.visit_time) === o.today).forEach(v => {
     const res = String(v.deliver_result || '');
@@ -19,6 +21,7 @@ function deliveryPlacementFlags_(o) {
       if (/^Shop (cancelled|reduced)/.test(why)) o.red.push(shop(v) + ' did not take packs already invoiced' + when + ': ' + o.esc(txt(left)) + ' (' + o.esc(why) + '). Raise a credit note for them.');
       else o.red.push('Invoiced packs not handed over at ' + shop(v) + ': owed ' + o.esc(txt(was)) + when + ', handed over ' + o.esc(txt(got)) + '. Still owed: ' + o.esc(txt(left)) + '. Reason: ' + o.esc(why) + '.');
     }
+    if (Object.keys(parse(v.deliver_lines)).length && !String(v.invoice_photo || '').trim()) o.red.push('Packs handed over at ' + shop(v) + ' (' + o.esc(txt(parse(v.deliver_lines))) + ') with no photo of the invoice signed as received.');
     const placed = String(v.delivery || '') === 'Handed over' || Object.keys(parse(v.deliver_lines)).length > 0;
     if (placed) {
       const bad = [];
@@ -34,10 +37,10 @@ function deliveryPlacementFlags_(o) {
     if (String(v.delivery || '') === 'Next visit') {
       const q = {};
       Object.keys(v).forEach(k => { const m = k.match(/^refill_(.+)$/); if (m && m[1] !== 'override' && Number(v[k]) > 0) q[m[1]] = Number(v[k]); });
-      nextVisit.push(shop(v) + ' (' + o.esc(txt(q)) + ')');
+      nextVisit.push(shop(v) + ' (' + o.esc(txt(q)) + '; invoice ' + o.esc((invOf[String(v.visit_id)] || ['not made yet']).join(', ')) + ')');
     }
   });
-  if (nextVisit.length) o.amber.push('Invoiced today, to be handed over at the next visit - make sure he has the stock: ' + nextVisit.join('; ') + '.');
+  if (nextVisit.length) o.amber.push('Invoiced today, to be handed over at the next visit - print these invoices for him to get signed on delivery, and make sure he has the stock: ' + nextVisit.join('; ') + '.');
   const latest = {};
   o.visits.forEach(v => { const t = new Date(v.visit_time).getTime() || 0; if (!latest[v.shop_id] || t > latest[v.shop_id].t) latest[v.shop_id] = {t: t, v: v}; });
   Object.keys(latest).forEach(s => {

@@ -42,7 +42,7 @@ function shortDate(iso) { return iso ? new Date(iso).toLocaleDateString('en-IN',
 function prevVisit(shopId) {
   const c = [];
   const sv = S.data && S.data.last && S.data.last[shopId];
-  if (sv) c.push({visit_id: sv.visit_id || '', visit_time: sv.visit_time, pending: sv.pending || {}, legacy: hasKeys(sv.legacy) ? sv.legacy : null});
+  if (sv) c.push({visit_id: sv.visit_id || '', visit_time: sv.visit_time, pending: sv.pending || {}, legacy: hasKeys(sv.legacy) ? sv.legacy : null, invoices: sv.invoices || []});
   (S.sentLog || []).filter(x => x.type === 'visit' && x.shop_id === shopId && x.visit_time && x.v2).slice(0, 1).forEach(x => c.push({visit_id: x.id, visit_time: x.visit_time, pending: parseOrder(x.deliver_pending), legacy: null}));
   S.outbox.filter(o => o.type === 'visit' && o.payload.shop_id === shopId).forEach(o => c.push({visit_id: o.payload.visit_id, visit_time: o.payload.visit_time, pending: parseOrder(o.payload.fields.deliver_pending), legacy: null}));
   const t = x => new Date(x.visit_time || 0).getTime() || 0;
@@ -496,11 +496,11 @@ function openVisit(shopId) {
     count: {}, refill: {}, takeback: {}, what: [], takeback_reason: '', pay_mode: '', amount: '', utr: '', cheque_no: '', cheque_date: '',
     lines: {}, not_collected_reason: '', slip_no: '', slip_photo: '', shelf_photo: '', asked_by_name: '', issue: 'None', issue_note: '',
     count_override: false, refill_override: false,
-    prev: null, legacy_answer: '', deliver: {}, deliver_reason: '', deliver_note: '', handover: '', place: {eye: '', block: '', strip: ''}, place_reason: '', place_note: ''
+    prev: null, legacy_answer: '', invoice_photo: '', deliver: {}, deliver_reason: '', deliver_note: '', handover: '', place: {eye: '', block: '', strip: ''}, place_reason: '', place_note: ''
   };
   const pv = prevVisit(shopId);
   if (pv && (hasKeys(pv.pending) || pv.legacy)) {
-    S.form.prev = {visit_id: pv.visit_id, visit_time: pv.visit_time, pending: pv.pending || {}, legacy: pv.legacy};
+    S.form.prev = {visit_id: pv.visit_id, visit_time: pv.visit_time, pending: pv.pending || {}, legacy: pv.legacy, invoices: pv.invoices || []};
     Object.keys(Object.assign({}, pv.pending, pv.legacy || {})).forEach(sku => { if (S.form.products.indexOf(sku) < 0) { S.form.products.push(sku); S.form.add_products.push(sku); } });
   }
   S.view = 'visit'; saveDraft(); startGeo(); render(); window.scrollTo(0, 0);
@@ -531,6 +531,8 @@ function deliverPending(f) {
   if (has(f, 'Refilled') && f.handover === 'No') f.products.forEach(sku => { const q = Number(f.refill[sku]) || 0; if (q > 0) p[sku] = (p[sku] || 0) + q; });
   return p;
 }
+function handedOverNow(f) { return Object.keys(owed(f)).some(sku => deliveredNow(f, sku) > 0); }
+function invoiceLabel(f) { const n = (f.prev && f.prev.invoices) || []; return n.length ? 'invoice' + (n.length > 1 ? 's ' : ' ') + n.join(', ') : 'the invoice from ' + shortDate(f.prev && f.prev.visit_time); }
 function placeNeeded(f) { return (has(f, 'Refilled') && f.handover === 'Yes') || Object.keys(owed(f)).some(sku => deliveredNow(f, sku) > 0); }
 function placeBad(f) { return placeNeeded(f) && (f.place.eye === 'No' || f.place.block === 'No' || f.place.strip === 'No'); }
 function slipNeeded(f) { return SLIP_ACTIONS.some(a => has(f, a)) || (has(f, 'Payment collected') && (f.pay_mode === 'Cash' || f.pay_mode === 'Cheque')); }
@@ -614,6 +616,7 @@ function validate(f) {
     if (!f.deliver_reason) m.push('Why not all owed packs were handed over');
     else if (f.deliver_reason === 'Other' && !String(f.deliver_note || '').trim()) m.push('Describe why the packs were not handed over');
   }
+  if (handedOverNow(f) && !f.invoice_photo) m.push('Photo of ' + invoiceLabel(f) + ' signed by the shopkeeper as received');
   if (has(f, 'Refilled') && !f.handover) m.push('Refill – were the packs handed over today?');
   if (placeNeeded(f)) {
     PLACE_QS.forEach(([k, q, short]) => { if (!f.place[k]) m.push('Shelf placement – ' + short); });
@@ -733,7 +736,8 @@ function deliverCardHtml(f) {
   if (f.prev.legacy) {
     h += `<div class="small">On ${shortDate(f.prev.visit_time)} you refilled: ${Object.keys(f.prev.legacy).map(sku => esc(productName(sku)) + ' ' + f.prev.legacy[sku]).join(', ')}.</div><label class="field">Were these packs handed over that day?</label><div class="choices"><button class="${f.legacy_answer === 'Yes' ? 'on' : ''}" onclick="setF('legacy_answer','Yes')">Yes – handed over that day</button><button class="${f.legacy_answer === 'No' ? 'on' : ''}" onclick="setF('legacy_answer','No')">No – delivering now</button></div>`;
   } else h += `<div class="small">Invoiced on ${shortDate(f.prev.visit_time)}. Hand over and place these packs first, then count the shelf.</div>`;
-  if (hasKeys(owed(f))) h += `${Object.keys(owed(f)).map(sku => `<div class="row"><div class="label">${esc(productName(sku))}<small>${owed(f)[sku]} owed – enter packs handed over now</small></div>${stepper('deliver', sku, f.deliver[sku])}</div>`).join('')}<div id="deliverstatus">${deliverStatusHtml(f)}</div>`;
+  if (hasKeys(owed(f))) h += `${Object.keys(owed(f)).map(sku => `<div class="row"><div class="label">${esc(productName(sku))}<small>${owed(f)[sku]} owed – enter packs handed over now</small></div>${stepper('deliver', sku, f.deliver[sku])}</div>`).join('')}<div id="deliverstatus">${deliverStatusHtml(f)}</div>
+    <label class="field">Printed ${esc(invoiceLabel(f))}, signed by the shopkeeper as received</label><div class="small">Get the shopkeeper to write "Received", sign and date it, then photograph it. Needed when you hand over any packs.</div>${photoBlock('invoice_photo')}`;
   return h;
 }
 
@@ -801,6 +805,7 @@ async function saveVisit() {
   fields.deliver_result = deliverResult(f);
   fields.deliver_reason = hasKeys(ow) && deliverShort(f).length ? f.deliver_reason + (f.deliver_reason === 'Other' ? ': ' + String(f.deliver_note).trim() : '') : '';
   fields.deliver_pending = orderText(deliverPending(f));
+  fields.deliver_invoices = handedOverNow(f) ? ((f.prev && f.prev.invoices) || []).join(' , ') : '';
   const pn = placeNeeded(f);
   fields.place_eye_level = pn ? f.place.eye : '';
   fields.place_one_block = pn ? f.place.block : '';
@@ -811,7 +816,7 @@ async function saveVisit() {
   const payload = {
     visit_id: f.visit_id, shop_id: f.shop_id, visit_time: f.opened_at, saved_at: new Date().toISOString(),
     gps: g ? g.lat.toFixed(6) + ', ' + g.lng.toFixed(6) : '0.000000, 0.000000', gps_accuracy: g ? g.accuracy : '',
-    fields: fields, lines: lines, add_products: f.add_products, shelf_photo: f.shelf_photo, slip_photo: slipNeeded(f) ? f.slip_photo : '', app_version: APP_VERSION
+    fields: fields, lines: lines, add_products: f.add_products, shelf_photo: f.shelf_photo, slip_photo: slipNeeded(f) ? f.slip_photo : '', invoice_photo: handedOverNow(f) ? f.invoice_photo : '', app_version: APP_VERSION
   };
   const shop = shopOf(f);
   await ffOutboxPut({id: f.visit_id, type: 'visit', payload: payload, created: Date.now(), label: shop.shop_name + ' – ' + f.what.join(', ')});

@@ -3,7 +3,8 @@ const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
-const VISIT_EXTRA_COLS_ = ['delivery', 'deliver_ref', 'deliver_was', 'deliver_lines', 'deliver_result', 'deliver_reason', 'deliver_pending', 'place_eye_level', 'place_one_block', 'place_strip', 'place_reason'];
+const VISIT_EXTRA_COLS_ = ['delivery', 'deliver_ref', 'deliver_was', 'deliver_lines', 'deliver_result', 'deliver_reason', 'deliver_pending', 'deliver_invoices', 'invoice_photo', 'place_eye_level', 'place_one_block', 'place_strip', 'place_reason'];
+const NO_CARRY_ = ['Shop cancelled the order', 'Shop reduced the order'];
 const LEGACY_DELIVERY_DAYS_ = 7;
 
 function parseOrder_(v) {
@@ -202,7 +203,7 @@ function list_(v) {
   return String(v || '').split(',').map(s => s.trim()).filter(Boolean);
 }
 
-const BOOT_SHEETS_ = ['APP_Shops', 'SHOP_Config', 'APP_Today', 'APP_Products', 'APP_Invoices', 'APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_Dispatches', 'APP_MonthClose', 'APP_Prospects'];
+const BOOT_SHEETS_ = ['APP_Shops', 'SHOP_Config', 'APP_Today', 'APP_Products', 'APP_Invoices', 'APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_Dispatches', 'APP_MonthClose', 'APP_Prospects', 'INV_Log'];
 const BOOT_TEST_ = ['APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_MonthClose', 'APP_Prospects'];
 const DATE_COLS_ = {visit_time: 1, cheque_date: 1, close_date: 1, dispatch_date: 1, month: 1, counted_at: 1, received_time: 1, created_at: 1, last_visit: 1, inv_date: 1, saved_at: 1, onboarded_on: 1};
 
@@ -304,6 +305,21 @@ function bootstrap_(rep) {
     if (!lastByShop[sid] || t > lastByShop[sid].t) lastByShop[sid] = {t: t, v: v};
   });
   const last = {};
+  const invByVisit = {};
+  rowsOf('INV_Log').forEach(l => { if (String(l.doc_type) === 'INV' && String(l.status) === 'OK' && l.visit_id) (invByVisit[String(l.visit_id)] = invByVisit[String(l.visit_id)] || []).push(String(l.doc_no)); });
+  const visById = {};
+  visitsT.rows.forEach(v => { if (v.visit_id) visById[String(v.visit_id)] = v; });
+  const owedInvoices = v0 => {
+    const out = [];
+    let v = v0;
+    for (let k = 0; v && k < 12; k++) {
+      if (String(v.delivery || '') === 'Next visit' || (k === 0 && String(v.delivery || '') === '')) (invByVisit[String(v.visit_id)] || []).forEach(n => { if (out.indexOf(n) < 0) out.push(n); });
+      const res = String(v.deliver_result || '');
+      if (!((res === 'Part delivered' || res === 'Not delivered') && NO_CARRY_.indexOf(String(v.deliver_reason || '')) < 0)) break;
+      v = visById[String(v.deliver_ref || '')];
+    }
+    return out;
+  };
   Object.keys(lastByShop).forEach(sid => {
     const v = lastByShop[sid].v;
     const after = {};
@@ -319,6 +335,7 @@ function bootstrap_(rep) {
     const newStyle = String(v.delivery || '') !== '' || String(v.deliver_result || '') !== '';
     const age = v.visit_time instanceof Date ? (Date.now() - v.visit_time.getTime()) / 86400000 : 999;
     last[sid] = {visit_time: iso_(v.visit_time), after: after, visit_id: String(v.visit_id || ''), pending: parseOrder_(v.deliver_pending), legacy: !newStyle && Object.keys(refill).length > 0 && age <= LEGACY_DELIVERY_DAYS_ ? refill : null};
+    last[sid].invoices = (Object.keys(last[sid].pending).length || last[sid].legacy) ? owedInvoices(v) : [];
   });
   const pads = both('APP_SlipPads')
     .filter(p => String(p.rep_email).trim().toLowerCase() === me)
@@ -614,6 +631,7 @@ function photoPath_(rep, folderName, recordId, column) {
 function visitPhotos_(rep, v) {
   if (v.shelf_photo) savePhoto_('APP_Visits_Images', v.visit_id, 'shelf_photo', v.shelf_photo, rep);
   if (v.slip_photo) savePhoto_('APP_Visits_Images', v.visit_id, 'slip_photo', v.slip_photo, rep);
+  if (v.invoice_photo) savePhoto_('APP_Visits_Images', v.visit_id, 'invoice_photo', v.invoice_photo, rep);
 }
 
 function savePhoto_(folderName, recordId, column, dataUrl, rep) {
@@ -648,6 +666,8 @@ function saveVisit_(rep, v) {
   mark_('shop');
   const shelf = v.shelf_photo ? photoPath_(rep, 'APP_Visits_Images', v.visit_id, 'shelf_photo') : '';
   const slip = v.slip_photo ? photoPath_(rep, 'APP_Visits_Images', v.visit_id, 'slip_photo') : '';
+  const invPhoto = v.invoice_photo ? photoPath_(rep, 'APP_Visits_Images', v.visit_id, 'invoice_photo') : '';
+  if (invPhoto) fx.invoice_photo = invPhoto;
   const f = v.fields || {};
   const row = head.map(h => {
     if (h === 'visit_id') return v.visit_id;
@@ -657,6 +677,7 @@ function saveVisit_(rep, v) {
     if (h === 'gps') return v.gps || '0.000000, 0.000000';
     if (h === 'shelf_photo') return shelf;
     if (h === 'slip_photo') return slip;
+    if (h === 'invoice_photo') return invPhoto;
     if (h === 'what_happened') return (f.what_happened || []).join(' , ');
     if (h === 'cheque_date') return f.cheque_date ? new Date(f.cheque_date + 'T00:00:00+05:30') : new Date(v.visit_time);
     if (h === 'spot_check') return false;
