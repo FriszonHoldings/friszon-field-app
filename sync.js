@@ -107,7 +107,7 @@ async function ffSyncOutbox(onProgress) {
         const sentLog = (await ffGet('sentLog')) || [];
         const pl = item.payload || {}, fl = pl.fields || {};
         sentLog.unshift({id: item.id, type: item.type, shop_id: pl.shop_id || '', label: item.label || '', saved_at: item.created, sent_at: Date.now(),
-          visit_time: pl.visit_time || '', pay_mode: fl.pay_mode || '', amount: fl.amount || 0, paid: (fl.what_happened || []).indexOf('Payment collected') > -1, cheque_date: fl.cheque_date || '', slip_no: fl.slip_no || '', order_lines: fl.order_lines || '', refilled: Object.keys(fl).some(k => /^refill_/.test(k) && k !== 'refill_override' && Number(fl[k]) > 0),
+          visit_time: pl.visit_time || '', pay_mode: fl.pay_mode || '', amount: fl.amount || 0, paid: (fl.what_happened || []).indexOf('Payment collected') > -1, cheque_date: fl.cheque_date || '', slip_no: fl.slip_no || '', deliver_pending: fl.deliver_pending || '', v2: fl.delivery !== undefined,
           collections: pl.collections || [], close_date: pl.close_date || '', dispatch_id: pl.dispatch_id || '', month: pl.month || '', prospect_id: pl.prospect_id || '', stage: pl.stage || '',
           prospect: item.type === 'prospect' && pl.stage === 'f1' ? {prospect_id: pl.prospect_id, shop_name: pl.shop_name, pincode: pl.pincode, created_at: pl.saved_at, q8_community: (pl.answers || {}).q8_community || '', q9_shop_type: (pl.answers || {}).q9_shop_type || '', stop: !!pl.stop} : null});
         await ffSet('sentLog', sentLog.slice(0, 200));

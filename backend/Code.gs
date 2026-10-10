@@ -3,7 +3,8 @@ const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
-const VISIT_EXTRA_COLS_ = ['order_lines', 'order_ref', 'order_was', 'order_result', 'order_reason', 'place_ref', 'place_eye_level', 'place_one_block', 'place_strip', 'place_reason'];
+const VISIT_EXTRA_COLS_ = ['delivery', 'deliver_ref', 'deliver_was', 'deliver_lines', 'deliver_result', 'deliver_reason', 'deliver_pending', 'place_eye_level', 'place_one_block', 'place_strip', 'place_reason'];
+const LEGACY_DELIVERY_DAYS_ = 7;
 
 function parseOrder_(v) {
   const o = {};
@@ -313,8 +314,11 @@ function bootstrap_(rep) {
       if (v[k] === '' || v[k] === null) return;
       after[sku] = (Number(v[k]) || 0) + (Number(v['refill_' + sku]) || 0) - (Number(v['takeback_' + sku]) || 0);
     });
-    const refilled = Object.keys(v).some(k => /^refill_/.test(k) && k !== 'refill_override' && Number(v[k]) > 0);
-    last[sid] = {visit_time: iso_(v.visit_time), after: after, visit_id: String(v.visit_id || ''), refilled: refilled, order: parseOrder_(v.order_lines)};
+    const refill = {};
+    Object.keys(v).forEach(k => { const m = k.match(/^refill_(.+)$/); if (m && m[1] !== 'override' && Number(v[k]) > 0) refill[m[1]] = Number(v[k]); });
+    const newStyle = String(v.delivery || '') !== '' || String(v.deliver_result || '') !== '';
+    const age = v.visit_time instanceof Date ? (Date.now() - v.visit_time.getTime()) / 86400000 : 999;
+    last[sid] = {visit_time: iso_(v.visit_time), after: after, visit_id: String(v.visit_id || ''), pending: parseOrder_(v.deliver_pending), legacy: !newStyle && Object.keys(refill).length > 0 && age <= LEGACY_DELIVERY_DAYS_ ? refill : null};
   });
   const pads = both('APP_SlipPads')
     .filter(p => String(p.rep_email).trim().toLowerCase() === me)
@@ -632,8 +636,7 @@ function saveVisit_(rep, v) {
   const ids = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
   mark_('ids');
   const fx = v.fields || {};
-  if (Object.prototype.hasOwnProperty.call(fx, 'order_lines')) fx.order_lines = orderText_(parseOrder_(fx.order_lines));
-  if (Object.prototype.hasOwnProperty.call(fx, 'order_was')) fx.order_was = orderText_(parseOrder_(fx.order_was));
+  ['deliver_was', 'deliver_lines', 'deliver_pending'].forEach(k => { if (Object.prototype.hasOwnProperty.call(fx, k)) fx[k] = orderText_(parseOrder_(fx[k])); });
   if (VISIT_EXTRA_COLS_.some(k => fx[k] !== undefined && fx[k] !== null && String(fx[k]) !== '') && VISIT_EXTRA_COLS_.some(k => head.indexOf(k) < 0)) head = ensureCols_(sh, VISIT_EXTRA_COLS_);
   if (ids.indexOf(String(v.visit_id)) > -1) { visitPhotos_(rep, v); return {ok: true, duplicate: true, visit_id: v.visit_id}; }
   const shopSh = ss.getSheetByName('APP_Shops');

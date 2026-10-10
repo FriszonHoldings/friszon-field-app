@@ -7,7 +7,8 @@ const TAKEBACK_REASONS = ['Near expiry', 'Damaged', 'Shop leaving'];
 const NOT_COLLECTED = ['Owner not there', 'Owner refused', 'Owner asked for time', 'Other'];
 const ISSUES = ['None', 'Damage', 'Near expiry', 'Dispute', 'Shop closing', 'Competitor offer', 'Other'];
 const BALANCE_REASONS = ['To be collected later', 'Stock returned', 'Stock expired'];
-const ORDER_REASONS = ['Out of stock with me', 'Shop cancelled the order', 'Shop reduced the order', 'Other'];
+const DELIVER_REASONS = ['Out of stock with me', 'Shop cancelled the order', 'Shop reduced the order', 'Other'];
+const NO_CARRY = ['Shop cancelled the order', 'Shop reduced the order'];
 const PLACE_REASONS = ['Owner refused', 'No space at eye or hand level', 'Other'];
 const PLACE_QS = [['eye', 'All Friszon packs at eye or hand level', 'eye or hand level'], ['block', 'All Friszon packs together in one block, facing front', 'one block'], ['strip', 'Friszon shelf strip in place and visible', 'shelf strip']];
 
@@ -36,17 +37,17 @@ function parseOrder(v) {
   return o;
 }
 function orderText(o) { return Object.keys(o || {}).filter(k => Number(o[k]) > 0).map(k => k + ':' + Number(o[k])).join(' , '); }
-function refilledIn(fl) { return Object.keys(fl || {}).some(k => /^refill_/.test(k) && k !== 'refill_override' && Number(fl[k]) > 0); }
+function hasKeys(o) { return !!o && Object.keys(o).length > 0; }
+function shortDate(iso) { return iso ? new Date(iso).toLocaleDateString('en-IN', {day: 'numeric', month: 'short'}) : ''; }
 function prevVisit(shopId) {
   const c = [];
   const sv = S.data && S.data.last && S.data.last[shopId];
-  if (sv) c.push({visit_id: sv.visit_id || '', visit_time: sv.visit_time, refilled: !!sv.refilled, order: sv.order || {}});
-  (S.sentLog || []).filter(x => x.type === 'visit' && x.shop_id === shopId && x.visit_time && (x.order_lines !== undefined || x.refilled !== undefined)).slice(0, 1).forEach(x => c.push({visit_id: x.id, visit_time: x.visit_time, refilled: !!x.refilled, order: parseOrder(x.order_lines)}));
-  S.outbox.filter(o => o.type === 'visit' && o.payload.shop_id === shopId).forEach(o => c.push({visit_id: o.payload.visit_id, visit_time: o.payload.visit_time, refilled: refilledIn(o.payload.fields), order: parseOrder(o.payload.fields.order_lines)}));
+  if (sv) c.push({visit_id: sv.visit_id || '', visit_time: sv.visit_time, pending: sv.pending || {}, legacy: hasKeys(sv.legacy) ? sv.legacy : null});
+  (S.sentLog || []).filter(x => x.type === 'visit' && x.shop_id === shopId && x.visit_time && x.v2).slice(0, 1).forEach(x => c.push({visit_id: x.id, visit_time: x.visit_time, pending: parseOrder(x.deliver_pending), legacy: null}));
+  S.outbox.filter(o => o.type === 'visit' && o.payload.shop_id === shopId).forEach(o => c.push({visit_id: o.payload.visit_id, visit_time: o.payload.visit_time, pending: parseOrder(o.payload.fields.deliver_pending), legacy: null}));
   const t = x => new Date(x.visit_time || 0).getTime() || 0;
   return c.sort((a, b) => t(b) - t(a))[0] || null;
 }
-function hasKeys(o) { return !!o && Object.keys(o).length > 0; }
 
 function toast(msg, ms) { S.toast = msg; renderToast(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = ''; renderToast(); }, ms || 3000); }
 function renderToast() { let el = document.getElementById('toast'); if (!S.toast) { if (el) el.remove(); return; } if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); } el.textContent = S.toast; }
@@ -163,9 +164,9 @@ function shopRows() {
     const t = todayBy[s.shop_id] || {};
     const days = daysSince(t.last_visit);
     const pv = prevVisit(s.shop_id);
-    const orderDue = !visited[s.shop_id] && !!pv && hasKeys(pv.order);
-    const due = !visited[s.shop_id] && (!t.last_visit || days >= DUE_DAYS || /Collect/.test(t.flag || '') || orderDue);
-    return Object.assign({}, s, {t: t, days: days, due: due, orderDue: orderDue, visitedToday: !!visited[s.shop_id]});
+    const deliverDue = !visited[s.shop_id] && !!pv && hasKeys(pv.pending);
+    const due = !visited[s.shop_id] && (!t.last_visit || days >= DUE_DAYS || /Collect/.test(t.flag || '') || deliverDue);
+    return Object.assign({}, s, {t: t, days: days, due: due, deliverDue: deliverDue, visitedToday: !!visited[s.shop_id]});
   });
 }
 
@@ -214,7 +215,7 @@ function renderList(dueOnly) {
   const list = rows.map(r => {
     const flags = (r.t.flag || '').split('|').map(x => x.trim()).filter(Boolean);
     const chips = flags.map(f => `<span class="chip ${/Collect|overdue/i.test(f) ? 'red' : /confirmation|10\+/.test(f) ? 'amber' : ''}">${esc(f)}</span>`).join('');
-    const done = (r.orderDue ? '<span class="chip red">Deliver order</span>' : '') + (r.visitedToday ? '<span class="chip">Visited today</span>' : '');
+    const done = (r.deliverDue ? '<span class="chip red">Deliver packs</span>' : '') + (r.visitedToday ? '<span class="chip">Visited today</span>' : '');
     return `<button class="shop" onclick="openVisit('${esc(r.shop_id)}')"><div class="name">${esc(r.shop_name)}</div><div class="meta">${esc(r.shop_id)} · ${r.t.last_visit ? 'last visit ' + (r.days === 0 ? 'today' : r.days + ' days ago') : 'never visited'}${r.t.amount_due ? ' · due ' + money(r.t.amount_due) : ''}</div><div class="meta">${esc(r.t.refill_plan || '')}</div>${chips}${done}</button>`;
   }).join('');
   return `<input class="search" placeholder="Search shop" value="${esc(S.search)}" oninput="S.search=this.value;document.getElementById('list').innerHTML=renderListInner(${dueOnly})">
@@ -490,16 +491,18 @@ function geoText(err) { return S.geo ? `📍 Location found (±${S.geo.accuracy}
 function openVisit(shopId) {
   S.showAllMissing = false;
   const shop = S.data.shops.find(s => s.shop_id === shopId);
-  const pv = prevVisit(shopId);
   S.form = {
     visit_id: uid(), shop_id: shopId, opened_at: new Date().toISOString(), products: shop.products.slice(), add_products: [],
     count: {}, refill: {}, takeback: {}, what: [], takeback_reason: '', pay_mode: '', amount: '', utr: '', cheque_no: '', cheque_date: '',
     lines: {}, not_collected_reason: '', slip_no: '', slip_photo: '', shelf_photo: '', asked_by_name: '', issue: 'None', issue_note: '',
     count_override: false, refill_override: false,
-    prev: pv ? {visit_id: pv.visit_id, visit_time: pv.visit_time, refilled: !!pv.refilled, order: pv.order || {}} : null,
-    order_on: false, order: {}, order_reason: '', order_note: '', place: {eye: '', block: '', strip: ''}, place_reason: '', place_note: ''
+    prev: null, legacy_answer: '', deliver: {}, deliver_reason: '', deliver_note: '', handover: '', place: {eye: '', block: '', strip: ''}, place_reason: '', place_note: ''
   };
-  if (pv && hasKeys(pv.order)) Object.keys(pv.order).forEach(sku => { if (S.form.products.indexOf(sku) < 0) { S.form.products.push(sku); S.form.add_products.push(sku); } });
+  const pv = prevVisit(shopId);
+  if (pv && (hasKeys(pv.pending) || pv.legacy)) {
+    S.form.prev = {visit_id: pv.visit_id, visit_time: pv.visit_time, pending: pv.pending || {}, legacy: pv.legacy};
+    Object.keys(Object.assign({}, pv.pending, pv.legacy || {})).forEach(sku => { if (S.form.products.indexOf(sku) < 0) { S.form.products.push(sku); S.form.add_products.push(sku); } });
+  }
   S.view = 'visit'; saveDraft(); startGeo(); render(); window.scrollTo(0, 0);
 }
 
@@ -509,17 +512,27 @@ function saveDraft() { clearTimeout(draftTimer); draftTimer = setTimeout(() => f
 function shopOf(f) { return S.data.shops.find(s => s.shop_id === f.shop_id) || {}; }
 function todayOf(f) { return (S.data.today || []).find(t => t.shop_id === f.shop_id) || {}; }
 function has(f, a) { return f.what.indexOf(a) > -1; }
-function pendingOrder(f) { return f.prev && hasKeys(f.prev.order) ? f.prev.order : null; }
-function delivered(f, sku) { return has(f, 'Refilled') ? (Number(f.refill[sku]) || 0) : 0; }
-function orderShort(f) { const o = pendingOrder(f); return o ? Object.keys(o).filter(sku => delivered(f, sku) < o[sku]) : []; }
-function orderResult(f) {
-  const o = pendingOrder(f); if (!o) return '';
-  if (!orderShort(f).length) return 'Delivered in full';
-  return Object.keys(o).some(sku => delivered(f, sku) > 0) ? 'Part delivered' : 'Not delivered';
+function owed(f) {
+  if (!f.prev) return {};
+  if (f.prev.legacy) return f.legacy_answer === 'No' ? f.prev.legacy : {};
+  return f.prev.pending || {};
 }
-function placeNeeded(f) { return !!(f.prev && f.prev.refilled); }
+function deliveredNow(f, sku) { const v = f.deliver[sku]; return v === '' || v === undefined ? 0 : Math.min(Number(v), owed(f)[sku] || 0); }
+function deliverShort(f) { const o = owed(f); return Object.keys(o).filter(sku => deliveredNow(f, sku) < o[sku]); }
+function deliverResult(f) {
+  const o = owed(f);
+  if (!hasKeys(o)) return f.prev && f.prev.legacy && f.legacy_answer === 'Yes' ? 'Handed over earlier' : '';
+  if (!deliverShort(f).length) return 'Delivered in full';
+  return Object.keys(o).some(sku => deliveredNow(f, sku) > 0) ? 'Part delivered' : 'Not delivered';
+}
+function deliverPending(f) {
+  const o = owed(f), p = {};
+  if (deliverShort(f).length && NO_CARRY.indexOf(f.deliver_reason) < 0) Object.keys(o).forEach(sku => { const r = o[sku] - deliveredNow(f, sku); if (r > 0) p[sku] = r; });
+  if (has(f, 'Refilled') && f.handover === 'No') f.products.forEach(sku => { const q = Number(f.refill[sku]) || 0; if (q > 0) p[sku] = (p[sku] || 0) + q; });
+  return p;
+}
+function placeNeeded(f) { return (has(f, 'Refilled') && f.handover === 'Yes') || Object.keys(owed(f)).some(sku => deliveredNow(f, sku) > 0); }
 function placeBad(f) { return placeNeeded(f) && (f.place.eye === 'No' || f.place.block === 'No' || f.place.strip === 'No'); }
-function newOrder(f) { const o = {}; if (f.order_on) f.products.forEach(sku => { if (Number(f.order[sku]) > 0) o[sku] = Number(f.order[sku]); }); return o; }
 function slipNeeded(f) { return SLIP_ACTIONS.some(a => has(f, a)) || (has(f, 'Payment collected') && (f.pay_mode === 'Cash' || f.pay_mode === 'Cheque')); }
 function openInvoices(f) {
   const pending = {};
@@ -590,11 +603,18 @@ function validate(f) {
     }
     if (!f.slip_photo) m.push('Photo of the signed slip');
   }
-  if (pendingOrder(f) && orderShort(f).length) {
-    if (!f.order_reason) m.push('Why the order was not delivered in full');
-    else if (f.order_reason === 'Other' && !String(f.order_note || '').trim()) m.push('Describe why the order was not delivered');
+  if (f.prev && f.prev.legacy && !f.legacy_answer) m.push('Were the packs from the ' + shortDate(f.prev.visit_time) + ' refill handed over that day?');
+  const ow = owed(f);
+  Object.keys(ow).forEach(sku => {
+    const v = f.deliver[sku];
+    if (v === '' || v === undefined) m.push(productName(sku) + ' – packs handed over today');
+    else if (Number(v) > ow[sku]) m.push(productName(sku) + ' – more than the ' + ow[sku] + ' owed');
+  });
+  if (hasKeys(ow) && deliverShort(f).length) {
+    if (!f.deliver_reason) m.push('Why not all owed packs were handed over');
+    else if (f.deliver_reason === 'Other' && !String(f.deliver_note || '').trim()) m.push('Describe why the packs were not handed over');
   }
-  if (f.order_on && !hasKeys(newOrder(f))) m.push('Order for next visit – quantity for at least one product (or untick it)');
+  if (has(f, 'Refilled') && !f.handover) m.push('Refill – were the packs handed over today?');
   if (placeNeeded(f)) {
     PLACE_QS.forEach(([k, q, short]) => { if (!f.place[k]) m.push('Shelf placement – ' + short); });
     if (placeBad(f)) {
@@ -615,12 +635,7 @@ function stepper(key, sku, val) {
   return `<div class="stepper"><button onclick="step('${key}','${sku}',-1)">−</button><input inputmode="numeric" class="${blank ? 'blank' : ''}" value="${blank ? '' : esc(val)}" oninput="setNum('${key}','${sku}',this.value)"><button onclick="step('${key}','${sku}',1)">+</button></div>`;
 }
 function step(key, sku, d) { const f = S.form; const cur = key === 'asked' ? f.asked_by_name : f[key][sku]; let n = (cur === '' || cur === undefined ? 0 : Number(cur)) + d; if (cur === '' || cur === undefined) n = Math.max(0, d > 0 ? 1 : 0); n = Math.max(0, n); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); renderVisit(true); }
-function setNum(key, sku, v) { const f = S.form; const val = v.replace(/[^0-9]/g, ''); const n = val === '' ? '' : Number(val); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); if (key === 'count') { const el = document.getElementById('countcheck'); if (el) el.innerHTML = countCheckHtml(f); } if (key === 'refill') { const el = document.getElementById('orderstatus'); if (el) el.innerHTML = orderStatusHtml(f); } updateMissing(); }
-function setOrderReason(v) {
-  const f = S.form; f.order_reason = v;
-  if (v === 'Out of stock with me') { const o = pendingOrder(f); f.order_on = true; orderShort(f).forEach(sku => { if (!(Number(f.order[sku]) > 0)) f.order[sku] = o[sku] - delivered(f, sku); }); }
-  saveDraft(); renderVisit(true);
-}
+function setNum(key, sku, v) { const f = S.form; const val = v.replace(/[^0-9]/g, ''); const n = val === '' ? '' : Number(val); if (key === 'asked') f.asked_by_name = n; else f[key][sku] = n; saveDraft(); if (key === 'count') { const el = document.getElementById('countcheck'); if (el) el.innerHTML = countCheckHtml(f); } if (key === 'deliver') { const el = document.getElementById('deliverstatus'); if (el) el.innerHTML = deliverStatusHtml(f); const pl = document.getElementById('placecard'); if (pl) pl.innerHTML = placeCardHtml(f); } updateMissing(); }
 function setPlace(k, v) { S.form.place[k] = v; saveDraft(); renderVisit(true); }
 function setF(k, v) { S.form[k] = v; saveDraft(); renderVisit(true); }
 function setFQuiet(k, v) { S.form[k] = v; saveDraft(); updateMissing(); }
@@ -663,21 +678,22 @@ function updateMissing() { const el = document.getElementById('missing'); if (!e
 function renderVisit(keepScroll) {
   const y = window.scrollY;
   const f = S.form, shop = shopOf(f), t = todayOf(f);
-  if (!f.order) f.order = {};
+  if (!f.deliver) f.deliver = {};
   if (!f.place) f.place = {eye: '', block: '', strip: ''};
   const others = (S.data.products || []).filter(p => f.products.indexOf(p.sku) < 0);
   const flags = (t.flag || '').split('|').map(x => x.trim()).filter(Boolean).map(x => `<span class="chip ${/Collect|overdue/i.test(x) ? 'red' : 'amber'}">${esc(x)}</span>`).join('');
   const inv = has(f, 'Payment collected') ? openInvoices(f) : [];
   let h = `<header class="top"${S.data.test ? ' style="background:#8a5a00"' : ''}><button onclick="cancelVisit()">←</button><h1>${esc(shop.shop_name)}</h1><span id="sync-status" class="status"></span></header><main>`;
   h += `<div class="card"><div class="small">${esc(shop.shop_id)}${t.amount_due ? ' · amount due ' + money(t.amount_due) : ''}</div><div class="small">${esc(t.refill_plan || '')}</div>${flags}<div class="small" id="geo" style="margin-top:8px">${geoText()}</div></div>`;
-  if (pendingOrder(f)) h += `<div class="card" style="border-left:4px solid var(--red)"><h2>Order to deliver today</h2><div class="small">Taken on ${new Date(f.prev.visit_time).toLocaleDateString('en-IN', {day: 'numeric', month: 'short'})}. Tick <b>Refilled</b> below and enter these packs.</div><div id="orderstatus">${orderStatusHtml(f)}</div></div>`;
-  h += `<div class="card"><h2>Packs on the shelf now</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('count', sku, f.count[sku])}</div>`).join('')}
+  if (f.prev) h += `<div class="card" style="border-left:4px solid var(--red)"><h2>Deliver today</h2>${deliverCardHtml(f)}</div>`;
+  h += `<div class="card"><h2>Packs on the shelf now</h2>${hasKeys(owed(f)) ? '<div class="small">Count after placing the packs you hand over today.</div>' : ''}${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('count', sku, f.count[sku])}</div>`).join('')}
     ${others.length ? `<label class="field">Shop now keeps another product?</label><select onchange="addProduct(this.value)"><option value="">+ Add a product</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(productName(p.sku))}</option>`).join('')}</select>` : ''}
     <div id="countcheck">${countCheckHtml(f)}</div></div>`;
   h += `<div class="card"><h2>What happened at this visit?</h2><div class="choices">${ACTIONS.map(a => `<button class="${has(f, a) ? 'on' : ''}" onclick="toggleWhat('${a}')">${a}</button>`).join('')}</div></div>`;
   if (has(f, 'Refilled')) {
     h += `<div class="card"><h2>Refill – packs added</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}${f.add_products.indexOf(sku) > -1 ? '<small>New for this shop</small>' : ''}</div>${stepper('refill', sku, f.refill[sku])}</div>`).join('')}
       ${others.length ? `<label class="field">Refilling a product this shop never had?</label><select onchange="addProduct(this.value, true)"><option value="">+ Add a new product to refill</option>${others.map(p => `<option value="${esc(p.sku)}">${esc(productName(p.sku))}</option>`).join('')}</select>` : ''}`;
+    h += `<label class="field">Were these packs handed over today?</label><div class="choices"><button class="${f.handover === 'Yes' ? 'on' : ''}" onclick="setF('handover','Yes')">Yes – on the shelf now</button><button class="${f.handover === 'No' ? 'on' : ''}" onclick="setF('handover','No')">No – I will deliver at the next visit</button></div>${f.handover === 'No' ? '<div class="small">The invoice is made today. Hand them over and place them at your next visit to this shop.</div>' : ''}`;
     if (!has(f, 'Payment collected') && t.payment_overdue) h += `<div class="err">This shop owes ${money(t.amount_due)} unpaid for 60+ days. Collect first.</div><label class="check"><input type="checkbox" ${f.refill_override ? 'checked' : ''} onchange="setF('refill_override',this.checked)"> My Reporting Manager approved this refill</label>`;
     h += `</div>`;
   }
@@ -685,7 +701,6 @@ function renderVisit(keepScroll) {
     h += `<div class="card"><h2>Packs taken back</h2>${f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('takeback', sku, f.takeback[sku])}</div>`).join('')}
       <label class="field">Why taken back?</label><select onchange="setF('takeback_reason',this.value)"><option value="">Choose</option>${TAKEBACK_REASONS.map(r => `<option ${f.takeback_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>`;
   }
-  h += `<div class="card"><h2>Order for next visit</h2><label class="check"><input type="checkbox" ${f.order_on ? 'checked' : ''} onchange="setF('order_on',this.checked)"> The shop gave an order I could not supply today</label>${f.order_on ? f.products.map(sku => `<div class="row"><div class="label">${esc(productName(sku))}</div>${stepper('order', sku, f.order[sku])}</div>`).join('') + '<div class="small">Deliver it at your next visit to this shop. No invoice until it is delivered.</div>' : ''}</div>`;
   if (has(f, 'Payment collected')) {
     h += `<div class="card"><h2>Payment collected</h2><div class="choices">${PAY_MODES.map(p => `<button class="${f.pay_mode === p ? 'on' : ''}" onclick="setF('pay_mode','${p}')">${p}</button>`).join('')}</div>
       <label class="field">Amount collected (₹)</label><input class="text" inputmode="decimal" value="${esc(f.amount)}" oninput="setFQuiet('amount',this.value.replace(/[^0-9.]/g,''))">`;
@@ -701,11 +716,7 @@ function renderVisit(keepScroll) {
     h += `<div class="card"><h2>Slip</h2>${myPads().length ? '' : '<div class="err">No slip pad recorded for you yet. Add your pad from the ☰ menu first.</div>'}<label class="field">Slip number (from your pad)</label><input class="text" inputmode="numeric" value="${esc(f.slip_no)}" oninput="setFQuiet('slip_no',this.value.replace(/[^0-9]/g,''))">
       <label class="field">Photo of the signed slip</label>${photoBlock('slip_photo')}</div>`;
   }
-  if (placeNeeded(f)) {
-    h += `<div class="card"><h2>Shelf placement</h2><div class="small">You refilled this shop on ${new Date(f.prev.visit_time).toLocaleDateString('en-IN', {day: 'numeric', month: 'short'})}. Arrange the shelf first, then answer for how it is now.</div>${PLACE_QS.map(([k, q]) => `<label class="field">${q}?</label><div class="choices">${(k === 'strip' ? ['Yes', 'No', 'No strip issued yet'] : ['Yes', 'No']).map(a => `<button class="${f.place[k] === a ? 'on' : ''}" onclick="setPlace('${k}','${a}')">${a}</button>`).join('')}</div>`).join('')}`;
-    if (placeBad(f)) h += `<label class="field">Why is it not right?</label><select onchange="setF('place_reason',this.value)"><option value="">Choose</option>${PLACE_REASONS.map(r => `<option ${f.place_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>${f.place_reason === 'Other' ? `<label class="field">Describe the problem</label><textarea oninput="setFQuiet('place_note',this.value)">${esc(f.place_note)}</textarea>` : ''}`;
-    h += `<div class="small" style="margin-top:8px">The shelf photo below must show it.</div></div>`;
-  }
+  h += `<div id="placecard">${placeCardHtml(f)}</div>`;
   h += `<div class="card"><h2>Shelf photo</h2><div class="small">All Friszon packs visible.</div><br>${photoBlock('shelf_photo')}</div>`;
   h += `<div class="card"><div class="row"><div class="label">Customers who asked for Friszon by name</div>${stepper('asked', '', f.asked_by_name)}</div>
     <label class="field">Any issue at this shop?</label><select onchange="setF('issue',this.value)">${ISSUES.map(r => `<option ${f.issue === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
@@ -717,13 +728,27 @@ function renderVisit(keepScroll) {
   if (keepScroll) window.scrollTo(0, y);
 }
 
-function orderStatusHtml(f) {
-  const o = pendingOrder(f); if (!o) return '';
-  let h = Object.keys(o).map(sku => { const d = delivered(f, sku); return `<div class="row"><div class="label">${esc(productName(sku))}</div><b style="color:${d >= o[sku] ? 'var(--green, #2f5d34)' : 'var(--red)'}">${d} of ${o[sku]}</b></div>`; }).join('');
-  const short = orderShort(f);
-  if (short.length) h += `<label class="field">Why is the order not delivered in full?</label><select onchange="setOrderReason(this.value)"><option value="">Choose</option>${ORDER_REASONS.map(r => `<option ${f.order_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>${f.order_reason === 'Other' ? `<label class="field">Describe why</label><textarea oninput="setFQuiet('order_note',this.value)">${esc(f.order_note)}</textarea>` : ''}${f.order_reason === 'Out of stock with me' ? '<div class="small">The rest is carried into "Order for next visit" below.</div>' : ''}`;
-  else h += '<div class="small" style="color:var(--green, #2f5d34)">Order delivered in full ✓</div>';
+function deliverCardHtml(f) {
+  let h = '';
+  if (f.prev.legacy) {
+    h += `<div class="small">On ${shortDate(f.prev.visit_time)} you refilled: ${Object.keys(f.prev.legacy).map(sku => esc(productName(sku)) + ' ' + f.prev.legacy[sku]).join(', ')}.</div><label class="field">Were these packs handed over that day?</label><div class="choices"><button class="${f.legacy_answer === 'Yes' ? 'on' : ''}" onclick="setF('legacy_answer','Yes')">Yes – handed over that day</button><button class="${f.legacy_answer === 'No' ? 'on' : ''}" onclick="setF('legacy_answer','No')">No – delivering now</button></div>`;
+  } else h += `<div class="small">Invoiced on ${shortDate(f.prev.visit_time)}. Hand over and place these packs first, then count the shelf.</div>`;
+  if (hasKeys(owed(f))) h += `${Object.keys(owed(f)).map(sku => `<div class="row"><div class="label">${esc(productName(sku))}<small>${owed(f)[sku]} owed – enter packs handed over now</small></div>${stepper('deliver', sku, f.deliver[sku])}</div>`).join('')}<div id="deliverstatus">${deliverStatusHtml(f)}</div>`;
   return h;
+}
+
+function deliverStatusHtml(f) {
+  const o = owed(f); if (!hasKeys(o)) return '';
+  if (Object.keys(o).some(sku => f.deliver[sku] === '' || f.deliver[sku] === undefined)) return '';
+  if (!deliverShort(f).length) return '<div class="small" style="color:var(--green)">All owed packs handed over ✓</div>';
+  return `<label class="field">Why were not all owed packs handed over?</label><select onchange="setF('deliver_reason',this.value)"><option value="">Choose</option>${DELIVER_REASONS.map(r => `<option ${f.deliver_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>${f.deliver_reason === 'Other' ? `<label class="field">Describe why</label><textarea oninput="setFQuiet('deliver_note',this.value)">${esc(f.deliver_note)}</textarea>` : ''}${f.deliver_reason ? `<div class="small">${NO_CARRY.indexOf(f.deliver_reason) > -1 ? 'These packs are already invoiced. Ashwin will raise a credit note for what the shop did not take.' : 'The rest stays owed – deliver it at your next visit.'}</div>` : ''}`;
+}
+
+function placeCardHtml(f) {
+  if (!placeNeeded(f)) return '';
+  let h = `<div class="card"><h2>Shelf placement</h2><div class="small">Place the new packs, then answer for how the shelf is now.</div>${PLACE_QS.map(([k, q]) => `<label class="field">${q}?</label><div class="choices">${(k === 'strip' ? ['Yes', 'No', 'No strip issued yet'] : ['Yes', 'No']).map(a => `<button class="${f.place[k] === a ? 'on' : ''}" onclick="setPlace('${k}','${a}')">${a}</button>`).join('')}</div>`).join('')}`;
+  if (placeBad(f)) h += `<label class="field">Why is it not right?</label><select onchange="setF('place_reason',this.value)"><option value="">Choose</option>${PLACE_REASONS.map(r => `<option ${f.place_reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select>${f.place_reason === 'Other' ? `<label class="field">Describe the problem</label><textarea oninput="setFQuiet('place_note',this.value)">${esc(f.place_note)}</textarea>` : ''}`;
+  return h + '<div class="small" style="margin-top:8px">The shelf photo below must show it.</div></div>';
 }
 
 function countCheckHtml(f) {
@@ -767,14 +792,16 @@ async function saveVisit() {
   fields.issue_note = f.issue !== 'None' ? f.issue_note : '';
   fields.count_override = !!f.count_override && countTooHigh(f).length > 0;
   fields.refill_override = !!f.refill_override;
-  const po = pendingOrder(f), short = orderShort(f);
-  fields.order_lines = orderText(newOrder(f));
-  fields.order_ref = po ? f.prev.visit_id : '';
-  fields.order_was = po ? orderText(po) : '';
-  fields.order_result = orderResult(f);
-  fields.order_reason = po && short.length ? f.order_reason + (f.order_reason === 'Other' ? ': ' + String(f.order_note).trim() : '') : '';
+  const ow = owed(f), dl = {};
+  Object.keys(ow).forEach(sku => { const d = deliveredNow(f, sku); if (d > 0) dl[sku] = d; });
+  fields.delivery = has(f, 'Refilled') ? (f.handover === 'Yes' ? 'Handed over' : 'Next visit') : '';
+  fields.deliver_ref = f.prev ? f.prev.visit_id : '';
+  fields.deliver_was = orderText(ow);
+  fields.deliver_lines = orderText(dl);
+  fields.deliver_result = deliverResult(f);
+  fields.deliver_reason = hasKeys(ow) && deliverShort(f).length ? f.deliver_reason + (f.deliver_reason === 'Other' ? ': ' + String(f.deliver_note).trim() : '') : '';
+  fields.deliver_pending = orderText(deliverPending(f));
   const pn = placeNeeded(f);
-  fields.place_ref = pn ? f.prev.visit_id : '';
   fields.place_eye_level = pn ? f.place.eye : '';
   fields.place_one_block = pn ? f.place.block : '';
   fields.place_strip = pn ? f.place.strip : '';
