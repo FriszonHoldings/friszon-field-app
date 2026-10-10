@@ -255,7 +255,7 @@ function renderProspect(keep) {
   } else if (p.stage === 'f2') {
     h += `<div class="card"><h2>Q10 · Footfall count</h2><div class="small">Working day, 6–8 pm. Stand where you can see the entrance and count every adult customer who walks in for 15 minutes. Do NOT count staff, delivery people, children, people coming back in, or passers-by. Count – never estimate.</div>
       <div class="row" style="margin-top:8px"><div class="label">Adults who walked in</div><div class="stepper"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${esc(p.q10_footfall)}" oninput="this.value=this.value.replace(/[^0-9]/g,'');prSet('q10_footfall',this.value)" id="q10n"></div></div>
-      <button class="btn ghost" style="font-size:22px;padding:22px;margin-top:8px" onclick="q10Step(1)">+1 customer walked in</button></div>`;
+      <div class="small" style="margin-top:6px">Type the total after the 15 minutes.</div></div>`;
   } else {
     h += `<div class="card"><h2>Meet the owner – Q11 to Q17</h2><div class="small">Explain each point in plain words. Never offer anything extra to get a Yes.</div>`;
     visibleQs(F3Q, a, f3Stop).forEach(k => {
@@ -272,7 +272,6 @@ function renderProspect(keep) {
   $app.innerHTML = h; renderHeaderStatus(); prMissing();
   if (keep) window.scrollTo(0, y);
 }
-function q10Step(d) { const n = Math.max(0, (Number(S.pr.q10_footfall) || 0) + d); S.pr.q10_footfall = String(n); prDraft(); const el = document.getElementById('q10n'); if (el) el.value = n; prMissing(); }
 async function cancelProspect() {
   const p = S.pr;
   const started = p.stage === 'f1' ? (p.shop_name || p.front_photo) : p.stage === 'f2' ? p.q10_footfall : Object.keys(p.answers || {}).length;
