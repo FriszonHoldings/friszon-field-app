@@ -304,8 +304,9 @@ async function saveProspect() {
 }
 
 /* ---------- Attendance ---------- */
-const ATT_IN_BY = 600, ATT_OUT_FROM = 1080;
+const ATT_IN_BY = 600, ATT_OUT_FROM = 1080, ATT_FROM = '2026-10-15';
 let attTick = null;
+function attActive() { return todayKey() >= ATT_FROM; }
 function istMin(d) { const p = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false}).formatToParts(d || new Date()); return (Number(p.find(x => x.type === 'hour').value) % 24) * 60 + Number(p.find(x => x.type === 'minute').value); }
 function istDow(d) { return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Kolkata', weekday: 'short'}).format(d || new Date())) + 1; }
 function workdayToday() { return istDow() <= 6; }
@@ -334,19 +335,22 @@ function attState() {
   }
   return {s: s, inR: inR, outR: outLive || outRej, failed: failed};
 }
-function attLocked() { return !!S.data && workdayToday() && ['working', 'out_rejected'].indexOf(attState().s) < 0; }
+function attLocked() { return !!S.data && attActive() && workdayToday() && ['working', 'out_rejected'].indexOf(attState().s) < 0; }
 function attLockMsg() {
   const s = attState().s;
   return s === 'none' ? 'Mark in first – tap Mark in at the top of Shops Due.' : s === 'in_pending' ? 'Your late mark-in is waiting for Ashwin to approve.' : s === 'absent' ? 'Your late mark-in was rejected. Today is marked absent.' : s === 'out_pending' ? 'Your early mark-out is waiting for Ashwin.' : 'You have marked out for today.';
 }
 function attNote(r) { return r && r.decision_note ? ' – "' + esc(r.decision_note) + '"' : ''; }
 function attMenuText() {
+  if (!attActive()) return 'Starts ' + new Date(ATT_FROM + 'T12:00:00+05:30').toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long'});
   if (!workdayToday()) return 'Sunday – no mark in needed';
   const st = attState();
   return {none: 'Not marked in yet', in_pending: 'Late mark-in waiting for Ashwin', absent: 'Late mark-in rejected – absent today', working: 'Marked in at ' + hm(st.inR && st.inR.event_time), out_rejected: 'Early mark-out rejected – mark out after 6 pm', out_pending: 'Early mark-out waiting for Ashwin', out_done: 'Day done – out at ' + hm(st.outR && st.outR.event_time)}[st.s];
 }
 function attCardHtml() {
-  if (!S.data || !workdayToday()) return '';
+  if (!S.data) return '';
+  if (!attActive()) return `<div class="card att"><h2>New from ${new Date(ATT_FROM + 'T12:00:00+05:30').toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long'})}: Mark in and Mark out</h2><div class="small">Every working day (Monday to Saturday) mark in here before 10 am with a selfie, and mark out after 6 pm. Shop visits open only after you mark in. Marking in late or out early needs Ashwin's approval.</div></div>`;
+  if (!workdayToday()) return '';
   const st = attState(), m = istMin();
   const inT = st.inR ? hm(st.inR.event_time) : '';
   const q = r => r && r.queued ? ' <span class="small">(will send when signal is back)</span>' : '';
@@ -367,6 +371,7 @@ function attCardHtml() {
   return `<div class="card att ${cls}">${h}</div>`;
 }
 function openAtt(kind) {
+  if (!attActive()) return;
   const st = attState();
   if (kind === 'IN' && st.s !== 'none') return;
   if (kind === 'OUT' && ['working', 'out_rejected'].indexOf(st.s) < 0) { toast(attLockMsg()); return; }
