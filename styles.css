@@ -70,3 +70,9 @@ textarea { min-height: 70px; }
 .login h1 { color: var(--green); }
 .small { font-size: 13px; color: var(--muted); }
 .outbox-item { font-size: 14px; padding: 8px 0; border-top: 1px solid var(--line); }
+.card.att { border: 2px solid var(--green); }
+.card.att.wait { border-color: var(--amber); background: var(--amber-soft); }
+.card.att.stop { border-color: var(--red); background: var(--red-soft); }
+.locked { opacity: .45; }
+.clock { font-size: 34px; font-weight: 700; text-align: center; margin: 4px 0 2px; }
+.selfie img { width: 120px; height: 120px; border-radius: 50%; }

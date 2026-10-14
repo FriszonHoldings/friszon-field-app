@@ -302,3 +302,119 @@ async function saveProspect() {
   await ffSet('prDraft', null); S.pr = null;
   await refreshOutbox(); toast('Saved ✓'); S.view = 'prospects'; render(); syncNow();
 }
+
+/* ---------- Attendance ---------- */
+const ATT_IN_BY = 600, ATT_OUT_FROM = 1080;
+let attTick = null;
+function istMin(d) { const p = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false}).formatToParts(d || new Date()); return (Number(p.find(x => x.type === 'hour').value) % 24) * 60 + Number(p.find(x => x.type === 'minute').value); }
+function istDow(d) { return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Kolkata', weekday: 'short'}).format(d || new Date())) + 1; }
+function workdayToday() { return istDow() <= 6; }
+function hm(iso) { return iso ? new Date(iso).toLocaleTimeString('en-IN', {hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata'}) : ''; }
+function attRows() {
+  const tk = todayKey(), by = {};
+  if (S.data && S.data.todayDate === tk) (S.data.attendance || []).forEach(r => { by[r.att_id] = Object.assign({}, r); });
+  (S.sentLog || []).filter(x => x.type === 'att' && x.att && todayKey(x.att.event_time) === tk).forEach(x => { if (!by[x.att.att_id]) by[x.att.att_id] = Object.assign({}, x.att); });
+  S.outbox.filter(o => o.type === 'att' && todayKey(o.payload.event_time) === tk).forEach(o => { if (!by[o.payload.att_id]) by[o.payload.att_id] = {att_id: o.payload.att_id, kind: o.payload.kind, event_time: o.payload.event_time, reason: o.payload.reason || '', status: o.permanent ? 'Failed' : o.payload.reason ? 'Pending' : 'OK', queued: true, error: o.lastError || ''}; });
+  return Object.keys(by).map(k => by[k]).sort((a, b) => a.event_time < b.event_time ? -1 : 1);
+}
+function attState() {
+  const rows = attRows();
+  const ins = rows.filter(r => r.kind === 'IN' && r.status !== 'Failed');
+  const outs = rows.filter(r => r.kind === 'OUT' && r.status !== 'Failed');
+  const failed = rows.filter(r => r.status === 'Failed').pop() || null;
+  const inR = ins[ins.length - 1] || null;
+  const outLive = outs.filter(r => r.status !== 'Rejected').pop() || null;
+  const outRej = outs.filter(r => r.status === 'Rejected').pop() || null;
+  let s = 'none';
+  if (inR) {
+    if (inR.status === 'Pending') s = 'in_pending';
+    else if (inR.status === 'Rejected') s = 'absent';
+    else if (outLive) s = outLive.status === 'Pending' ? 'out_pending' : 'out_done';
+    else s = outRej ? 'out_rejected' : 'working';
+  }
+  return {s: s, inR: inR, outR: outLive || outRej, failed: failed};
+}
+function attLocked() { return !!S.data && workdayToday() && ['working', 'out_rejected'].indexOf(attState().s) < 0; }
+function attLockMsg() {
+  const s = attState().s;
+  return s === 'none' ? 'Mark in first – tap Mark in at the top of Shops Due.' : s === 'in_pending' ? 'Your late mark-in is waiting for Ashwin to approve.' : s === 'absent' ? 'Your late mark-in was rejected. Today is marked absent.' : s === 'out_pending' ? 'Your early mark-out is waiting for Ashwin.' : 'You have marked out for today.';
+}
+function attNote(r) { return r && r.decision_note ? ' – "' + esc(r.decision_note) + '"' : ''; }
+function attMenuText() {
+  if (!workdayToday()) return 'Sunday – no mark in needed';
+  const st = attState();
+  return {none: 'Not marked in yet', in_pending: 'Late mark-in waiting for Ashwin', absent: 'Late mark-in rejected – absent today', working: 'Marked in at ' + hm(st.inR && st.inR.event_time), out_rejected: 'Early mark-out rejected – mark out after 6 pm', out_pending: 'Early mark-out waiting for Ashwin', out_done: 'Day done – out at ' + hm(st.outR && st.outR.event_time)}[st.s];
+}
+function attCardHtml() {
+  if (!S.data || !workdayToday()) return '';
+  const st = attState(), m = istMin();
+  const inT = st.inR ? hm(st.inR.event_time) : '';
+  const q = r => r && r.queued ? ' <span class="small">(will send when signal is back)</span>' : '';
+  let cls = '', h = '';
+  if (st.s === 'none') {
+    h = m < ATT_IN_BY ? `<h2>Good morning</h2><div class="small">Mark in to start your day. Shop visits open after you mark in. Mark in before 10 am.</div><br><button class="btn" onclick="openAtt('IN')">Mark in</button>`
+      : `<h2>Not marked in</h2><div class="small">It is past 10 am. Ask Ashwin to approve a late mark-in. Shop visits stay locked until he approves.</div><br><button class="btn" onclick="openAtt('IN')">Ask to mark in late</button>`;
+    cls = m < ATT_IN_BY ? '' : 'stop';
+  } else if (st.s === 'in_pending') { cls = 'wait'; h = `<h2>Waiting for Ashwin</h2><div class="small">You asked to mark in late at ${inT}${q(st.inR)}. Shop visits open as soon as he approves.</div><br><button class="btn small ghost" onclick="pullData(true)">Check now</button>`; }
+  else if (st.s === 'absent') { cls = 'stop'; h = `<h2>Late mark-in rejected</h2><div class="small">Ashwin rejected your late mark-in${attNote(st.inR)}. Today is marked absent. Call Ashwin if this is wrong.</div>`; }
+  else if (st.s === 'working' || st.s === 'out_rejected') {
+    h = `<h2>Marked in at ${inT}${st.inR.status === 'Approved' ? ' (late, approved)' : ''}${q(st.inR)}</h2>`;
+    if (st.s === 'out_rejected') h += `<div class="warn">Ashwin said no to marking out early${attNote(st.outR)}. Carry on, and mark out after 6 pm.</div>`;
+    h += m >= ATT_OUT_FROM ? `<button class="btn ghost" onclick="openAtt('OUT')">Mark out</button>` : `<div class="small">Mark out opens at 6 pm.</div><br><button class="btn small ghost" onclick="openAtt('OUT')">Ask to mark out early</button>`;
+  } else if (st.s === 'out_pending') { cls = 'wait'; h = `<h2>Waiting for Ashwin</h2><div class="small">You asked to mark out early at ${hm(st.outR.event_time)}${q(st.outR)}. Shop visits are paused until he answers.</div><br><button class="btn small ghost" onclick="pullData(true)">Check now</button>`; }
+  else if (st.s === 'out_done') h = `<h2>Day done ✓</h2><div class="small">In ${inT} · out ${hm(st.outR.event_time)}${st.outR.status === 'Approved' ? ' (early, approved)' : ''}${q(st.outR)}</div>`;
+  if (st.failed) h += `<div class="err">Not accepted by the office: ${esc(st.failed.error)}. Call Ashwin.</div>`;
+  return `<div class="card att ${cls}">${h}</div>`;
+}
+function openAtt(kind) {
+  const st = attState();
+  if (kind === 'IN' && st.s !== 'none') return;
+  if (kind === 'OUT' && ['working', 'out_rejected'].indexOf(st.s) < 0) { toast(attLockMsg()); return; }
+  S.showAllMissing = false;
+  S.att = {att_id: 'AT' + uid(), kind: kind, selfie: '', reason: '', opened: Date.now()};
+  S.view = 'att'; startGeo(); render(); window.scrollTo(0, 0);
+  clearInterval(attTick); attTick = setInterval(() => { if (S.view === 'att' && S.att) renderAtt(true); else clearInterval(attTick); }, 15000);
+}
+function attNeedReason() { const a = S.att, m = istMin(); return workdayToday() && (a.kind === 'IN' ? m >= ATT_IN_BY : m < ATT_OUT_FROM); }
+function attTitle() { const late = attNeedReason(); return S.att.kind === 'IN' ? (late ? 'Ask to mark in late' : 'Mark in') : (late ? 'Ask to mark out early' : 'Mark out'); }
+function attValidate() {
+  const a = S.att, m = [];
+  if (!a.selfie) m.push('Selfie');
+  if (!S.geo && Date.now() - a.opened < 60000) m.push('Location (wait up to a minute)');
+  if (attNeedReason() && String(a.reason).trim().length < 5) m.push('Reason for ' + (a.kind === 'IN' ? 'marking in late' : 'marking out early'));
+  return m;
+}
+function attMissing() { const el = document.getElementById('missing'); if (!el) return; const m = attValidate(); el.innerHTML = missingHtml(m, 'attMissing'); document.getElementById('savebtn').textContent = m.length ? 'Save (' + m.length + ' to fill)' : attNeedReason() ? 'Send request to Ashwin' : attTitle(); }
+function attSelfie() {
+  const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.capture = 'user';
+  input.onchange = async () => { const file = input.files && input.files[0]; if (!file) return; try { S.att.selfie = await compress(file); renderAtt(true); } catch (e) { logClient('error', 'selfie', String(e)); toast('Photo failed. Try again.'); } };
+  input.click();
+}
+function renderAtt(keep) {
+  const y = window.scrollY, a = S.att, need = attNeedReason();
+  const noGeoOk = !S.geo && Date.now() - a.opened >= 60000;
+  let h = topBar(attTitle(), 'cancelAtt()') + `<main><div class="card"><div class="clock">${hm(new Date().toISOString())}</div><div class="small" style="text-align:center">${new Date().toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata'})}</div></div>`;
+  if (need) h += `<div class="warn">${a.kind === 'IN' ? 'It is past 10 am. Ashwin must approve this late mark-in. Your shop visits stay locked until he does.' : 'It is before 6 pm. Ashwin must approve this early mark-out. Your shop visits pause until he answers.'}</div>`;
+  h += `<div class="card"><label class="field">Selfie (front camera, your face clearly visible)</label><div class="photo selfie">${a.selfie ? `<img src="${a.selfie}">` : ''}<button class="btn small ${a.selfie ? 'ghost' : ''}" onclick="attSelfie()">${a.selfie ? 'Retake selfie' : 'Take selfie'}</button></div>
+    <div id="geo" class="small" style="margin-top:12px">${geoText()}</div>${noGeoOk ? '<div class="warn">No location yet. You can still save; Ashwin will see that location was missing.</div>' : ''}`;
+  if (need) h += `<label class="field">Reason for ${a.kind === 'IN' ? 'marking in late' : 'marking out early'}</label><textarea oninput="S.att.reason=this.value;attMissing()">${esc(a.reason)}</textarea>`;
+  h += `</div></main><div class="savebar"><div class="inner"><div class="missing" id="missing"></div><button class="btn" id="savebtn" onclick="saveAtt()">${attTitle()}</button></div></div>`;
+  $app.innerHTML = h; renderHeaderStatus(); attMissing();
+  if (keep) window.scrollTo(0, y);
+}
+function cancelAtt() { stopGeo(); clearInterval(attTick); S.att = null; go('due'); }
+async function saveAtt() {
+  const m = attValidate();
+  if (m.length) { S.showAllMissing = true; renderAtt(true); toast('Fill the items listed in red first'); return; }
+  const a = S.att, g = S.geo, need = attNeedReason(), at = new Date().toISOString();
+  const payload = {att_id: a.att_id, kind: a.kind, event_time: at, selfie: a.selfie, gps: g ? g.lat.toFixed(6) + ', ' + g.lng.toFixed(6) : '', gps_accuracy: g ? g.accuracy : '', reason: need ? String(a.reason).trim() : '', app_version: APP_VERSION};
+  const label = (a.kind === 'IN' ? (need ? 'Late mark-in request' : 'Mark in') : (need ? 'Early mark-out request' : 'Mark out')) + ' ' + hm(at);
+  await ffOutboxPut({id: a.att_id, type: 'att', payload: payload, created: Date.now(), label: label});
+  stopGeo(); clearInterval(attTick); S.att = null;
+  await refreshOutbox();
+  S.view = 'due'; render(); window.scrollTo(0, 0);
+  toast(need ? 'Request saved ✓ Sending to Ashwin…' : a.kind === 'IN' ? 'Marked in ✓' : 'Marked out ✓');
+  await syncNow();
+  S.sentLog = (await ffGet('sentLog')) || [];
+  render();
+}

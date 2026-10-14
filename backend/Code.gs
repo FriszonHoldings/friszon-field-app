@@ -1,5 +1,11 @@
-const API_VERSION = '1.10.0';
+const API_VERSION = '1.11.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
+const API_URL_ = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
+const ADMIN_EMAIL_ = 'bujji.prabhu@gmail.com';
+const ATT_HEAD_ = ['att_id', 'rep_email', 'att_date', 'kind', 'event_time', 'phone_time', 'clock_skew_sec', 'received_at', 'gps', 'gps_accuracy', 'selfie', 'rule', 'reason', 'status', 'decided_at', 'decided_by', 'decision_note', 'app_version'];
+const ATT_IN_BY_ = 600;
+const ATT_OUT_FROM_ = 1080;
+const ATT_SKEW_OK_ = 120;
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -22,6 +28,7 @@ function orderText_(o) {
 
 function doGet(e) {
   const p = e && e.parameter ? e.parameter : {};
+  if (p.op === 'decide') return decidePage_(p);
   if (!p.op) return out_({ok: false, error: 'retry', via: 'get'});
   p.viaGet = true;
   return handle_(p);
@@ -61,6 +68,7 @@ function handle_(req) {
     else if (req.op === 'receipt') res = saveReceipt_(rep, req.receipt);
     else if (req.op === 'monthclose') res = saveMonthClose_(rep, req.monthclose);
     else if (req.op === 'prospect') res = saveProspect_(rep, req.prospect);
+    else if (req.op === 'att') res = saveAtt_(rep, req.att);
     else res = {ok: false, error: 'unknown_op'};
     res.ms = Date.now() - started;
     res.prof = PROF_.join(' ');
@@ -105,7 +113,7 @@ function authToken_(u, t) {
   return repFor_(email);
 }
 
-const ID_COLS_ = {visit: ['APP_Visits', 'visit_id'], pad: ['APP_SlipPads', 'pad_id'], dayclose: ['APP_DayClose', 'dayclose_id'], deposit: ['APP_Deposits', 'deposit_id'], receipt: ['APP_StockReceived', 'receipt_id'], monthclose: ['APP_MonthClose', 'monthclose_id'], prospect: ['APP_Prospects', 'prospect_id']};
+const ID_COLS_ = {visit: ['APP_Visits', 'visit_id'], pad: ['APP_SlipPads', 'pad_id'], dayclose: ['APP_DayClose', 'dayclose_id'], deposit: ['APP_Deposits', 'deposit_id'], receipt: ['APP_StockReceived', 'receipt_id'], monthclose: ['APP_MonthClose', 'monthclose_id'], prospect: ['APP_Prospects', 'prospect_id'], att: ['APP_Attendance', 'att_id']};
 const PROSPECT_STAGE_COL_ = {f1: 'prospect_id', f2: 'q10_footfall', f3: 'q11_terms'};
 
 function bounced_(rep, op, id) {
@@ -203,9 +211,9 @@ function list_(v) {
   return String(v || '').split(',').map(s => s.trim()).filter(Boolean);
 }
 
-const BOOT_SHEETS_ = ['APP_Shops', 'SHOP_Config', 'APP_Today', 'APP_Products', 'APP_Invoices', 'APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_Dispatches', 'APP_MonthClose', 'APP_Prospects', 'INV_Log'];
-const BOOT_TEST_ = ['APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_MonthClose', 'APP_Prospects'];
-const DATE_COLS_ = {visit_time: 1, cheque_date: 1, close_date: 1, dispatch_date: 1, month: 1, counted_at: 1, received_time: 1, created_at: 1, last_visit: 1, inv_date: 1, saved_at: 1, onboarded_on: 1};
+const BOOT_SHEETS_ = ['APP_Shops', 'SHOP_Config', 'APP_Today', 'APP_Products', 'APP_Invoices', 'APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_Dispatches', 'APP_MonthClose', 'APP_Prospects', 'INV_Log', 'APP_Attendance'];
+const BOOT_TEST_ = ['APP_Visits', 'APP_SlipPads', 'APP_Deposits', 'APP_DayClose', 'APP_StockReceived', 'APP_MonthClose', 'APP_Prospects', 'APP_Attendance'];
+const DATE_COLS_ = {visit_time: 1, cheque_date: 1, close_date: 1, dispatch_date: 1, month: 1, counted_at: 1, received_time: 1, created_at: 1, last_visit: 1, inv_date: 1, saved_at: 1, onboarded_on: 1, att_date: 1, event_time: 1, phone_time: 1, received_at: 1, decided_at: 1};
 
 function sheetMeta_(fresh) {
   const cache = CacheService.getScriptCache();
@@ -373,10 +381,14 @@ function bootstrap_(rep) {
     score: p.score === '' ? '' : Number(p.score), result: String(p.result || ''), score_detail: String(p.score_detail || ''),
     decision: String(p.decision || ''), decision_note: String(p.decision_note || ''), shop_id: String(p.shop_id || ''), stop: f1Stop_(p)
   }));
+  const attendance = rowsOf(rep.test ? 'TEST_APP_Attendance' : 'APP_Attendance')
+    .filter(r => String(r.rep_email).trim().toLowerCase() === me && r.att_date instanceof Date && Utilities.formatDate(r.att_date, TZ, 'yyyy-MM-dd') === todayKey)
+    .map(r => ({att_id: String(r.att_id), kind: String(r.kind), event_time: iso_(r.event_time), rule: String(r.rule || ''), reason: String(r.reason || ''), status: String(r.status || ''), decision_note: String(r.decision_note || '')}));
   return {
     ok: true, version: API_VERSION, now: new Date().toISOString(), rep: rep, test: !!rep.test, shops: shops, today: today,
     products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday, depositable: depositable, dayClosed: dayCloses.indexOf(todayKey) > -1, todayDate: todayKey,
-    dispatches: Object.keys(dispBy).map(k => dispBy[k]), monthClose: {month: mc.month, label: mc.label, open: mc.open, done: mcDone, opens: mc.opens}, prospects: prospects
+    dispatches: Object.keys(dispBy).map(k => dispBy[k]), monthClose: {month: mc.month, label: mc.label, open: mc.open, done: mcDone, opens: mc.opens}, prospects: prospects,
+    attendance: attendance, workday: Number(Utilities.formatDate(new Date(), TZ, 'u')) <= 6
   };
 }
 
@@ -754,6 +766,185 @@ function saveDayClose_(rep, d) {
     const o = {dayclose_id: d.dayclose_id, rep_email: rep.email, close_date: new Date(d.close_date + 'T00:00:00+05:30'), cash_collected_calc: Math.round(cash * 100) / 100, cheques_handed: cheques, deposited_all: cash === 0, note: d.note || '', confirm: true, saved_at: d.saved_at ? new Date(d.saved_at) : new Date()};
     sh.appendRow(rowFor_(headOf_(sh), o));
     return {ok: true, cash: o.cash_collected_calc, cheques: cheques};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function istParts_(d) {
+  return {date: Utilities.formatDate(d, TZ, 'yyyy-MM-dd'), min: Number(Utilities.formatDate(d, TZ, 'H')) * 60 + Number(Utilities.formatDate(d, TZ, 'm')), dow: Number(Utilities.formatDate(d, TZ, 'u'))};
+}
+
+function attSheet_(ss, rep) {
+  let base = ss.getSheetByName('APP_Attendance');
+  if (!base) {
+    base = ss.insertSheet('APP_Attendance');
+    base.getRange(1, 1, 1, ATT_HEAD_.length).setValues([ATT_HEAD_]);
+    base.setFrozenRows(1);
+    CacheService.getScriptCache().remove('sheet_meta');
+  }
+  const sh = sheet_(ss, rep, 'APP_Attendance');
+  if (sh.getLastColumn() === 0) sh.getRange(1, 1, 1, ATT_HEAD_.length).setValues([ATT_HEAD_]);
+  return sh;
+}
+
+function attSig_(id, test) {
+  return hex_(Utilities.computeHmacSha256Signature('att|' + id + '|' + (test ? 1 : 0), secret_())).slice(0, 32);
+}
+
+function attStatusOf_(sh, id) {
+  const r = table_(sh).rows.find(x => String(x.att_id) === String(id));
+  return r ? {status: String(r.status), rule: String(r.rule)} : {};
+}
+
+function saveAtt_(rep, a) {
+  if (!a || !a.att_id || ['IN', 'OUT'].indexOf(a.kind) < 0) return {ok: false, error: 'bad_att', detail: 'missing id or kind'};
+  const phoneTime = new Date(a.event_time);
+  if (isNaN(phoneTime.getTime())) return {ok: false, error: 'bad_att', detail: 'time missing'};
+  if (!a.selfie) return {ok: false, error: 'bad_att', detail: 'selfie missing'};
+  const ss = ss_();
+  const sh = attSheet_(ss, rep);
+  if (idsIn_(sh, 'att_id').indexOf(String(a.att_id)) > -1) { attPhoto_(rep, a); return Object.assign({ok: true, duplicate: true}, attStatusOf_(sh, a.att_id)); }
+  const now = new Date();
+  const sentAt = a.sent_at ? new Date(a.sent_at) : null;
+  const skew = sentAt && !isNaN(sentAt.getTime()) ? Math.round((now.getTime() - sentAt.getTime()) / 1000) : 0;
+  const used = Math.abs(skew) > ATT_SKEW_OK_ ? new Date(phoneTime.getTime() + skew * 1000) : phoneTime;
+  const p = istParts_(used);
+  const workday = p.dow <= 6;
+  const rule = a.kind === 'IN' ? (!workday ? 'Sunday' : p.min < ATT_IN_BY_ ? 'On time' : 'Late') : (!workday ? 'Sunday' : p.min >= ATT_OUT_FROM_ ? 'After 6 pm' : 'Early');
+  const pending = rule === 'Late' || rule === 'Early';
+  let reason = String(a.reason || '').trim();
+  if (pending && reason.length < 5 && used !== phoneTime) reason = 'No reason given – his phone clock was ' + Math.round(Math.abs(skew) / 60) + ' min ' + (skew > 0 ? 'slow' : 'fast') + ', so the app treated this as within time';
+  if (pending && reason.length < 5) return {ok: false, error: 'bad_att', detail: 'reason needed for ' + (a.kind === 'IN' ? 'a late mark-in' : 'an early mark-out')};
+  const o = {att_id: a.att_id, rep_email: rep.email, att_date: new Date(p.date + 'T00:00:00+05:30'), kind: a.kind, event_time: used, phone_time: phoneTime, clock_skew_sec: skew, received_at: now,
+    gps: a.gps || '', gps_accuracy: a.gps_accuracy || '', selfie: photoPath_(rep, 'APP_Attendance_Images', a.att_id, 'selfie'), rule: rule, reason: reason, status: pending ? 'Pending' : 'OK', app_version: a.app_version || ''};
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    if (idsIn_(sh, 'att_id').indexOf(String(a.att_id)) > -1) return Object.assign({ok: true, duplicate: true}, attStatusOf_(sh, a.att_id));
+    const day = table_(sh).rows.filter(r => String(r.rep_email).trim().toLowerCase() === rep.email && r.att_date instanceof Date && Utilities.formatDate(r.att_date, TZ, 'yyyy-MM-dd') === p.date);
+    if (a.kind === 'IN') {
+      if (day.some(r => String(r.kind) === 'IN')) return {ok: false, error: 'att_exists', detail: 'already marked in on ' + p.date};
+    } else {
+      const ins = day.filter(r => String(r.kind) === 'IN');
+      if (!ins.length) return {ok: false, error: 'bad_att', detail: 'no mark-in on ' + p.date};
+      if (!ins.some(r => ['OK', 'Approved'].indexOf(String(r.status)) > -1)) return {ok: false, error: 'bad_att', detail: ins.some(r => String(r.status) === 'Pending') ? 'mark-in not approved yet' : 'mark-in was rejected'};
+      if (day.some(r => String(r.kind) === 'OUT' && String(r.status) !== 'Rejected')) return {ok: false, error: 'att_exists', detail: 'already marked out on ' + p.date};
+    }
+    sh.appendRow(rowFor_(ensureCols_(sh, ATT_HEAD_), o));
+  } finally {
+    lock.releaseLock();
+  }
+  attPhoto_(rep, a);
+  if (pending) attNotify_(rep, o, a.selfie);
+  return {ok: true, att_id: a.att_id, status: o.status, rule: rule};
+}
+
+function attPhoto_(rep, a) {
+  if (a.selfie) savePhoto_('APP_Attendance_Images', a.att_id, 'selfie', a.selfie, rep);
+}
+
+function htmlEsc_(s) {
+  return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+function attNotify_(rep, o, selfie) {
+  try {
+    const what = o.kind === 'IN' ? 'late mark-in' : 'early mark-out';
+    const when = Utilities.formatDate(o.event_time, TZ, 'h:mm a, EEE d MMM');
+    const link = API_URL_ + '?op=decide&id=' + encodeURIComponent(o.att_id) + (rep.test ? '&x=1' : '') + '&s=' + attSig_(o.att_id, rep.test);
+    const map = o.gps ? 'https://maps.google.com/?q=' + encodeURIComponent(o.gps) : '';
+    const m = String(selfie || '').match(/^data:(image\/[a-z]+);base64,(.+)$/);
+    const inline = m ? {selfie: Utilities.newBlob(Utilities.base64Decode(m[2]), m[1], 'selfie.jpg')} : {};
+    const skew = Math.abs(o.clock_skew_sec) > ATT_SKEW_OK_ ? '<p style="color:#b00020">His phone clock was ' + Math.round(Math.abs(o.clock_skew_sec) / 60) + ' minutes ' + (o.clock_skew_sec > 0 ? 'behind' : 'ahead') + '. The time above is corrected.</p>' : '';
+    const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;max-width:520px">' +
+      '<h2 style="margin:0 0 8px">' + htmlEsc_(rep.name) + ' asks for a ' + what + '</h2>' +
+      '<p><b>Time:</b> ' + htmlEsc_(when) + '<br><b>Reason:</b> ' + htmlEsc_(o.reason) + '<br><b>Location:</b> ' + (map ? '<a href="' + map + '">open map</a>' + (o.gps_accuracy ? ' (±' + htmlEsc_(o.gps_accuracy) + ' m)' : '') : 'not available') + '</p>' + skew +
+      (m ? '<p><img src="cid:selfie" style="max-width:260px;border-radius:8px"></p>' : '') +
+      '<p><a href="' + link + '" style="display:inline-block;background:#1b5e20;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Approve or reject</a></p>' +
+      '<p style="color:#666;font-size:13px">' + (o.kind === 'IN' ? 'His shop visits stay locked until you approve.' : 'His shop visits are locked while this waits. If you reject, he carries on until 6 pm.') + '</p></div>';
+    MailApp.sendEmail({to: ADMIN_EMAIL_, subject: (rep.test ? '[TEST] ' : '') + rep.name + ' – ' + what + ' request, ' + when, htmlBody: html, inlineImages: inline, name: 'Friszon Field'});
+  } catch (err) {
+    try { serverError_({op: 'att_mail', email: rep.email}, err); } catch (e2) {}
+  }
+}
+
+function attFind_(test, id) {
+  const sh = ss_().getSheetByName((test ? 'TEST_' : '') + 'APP_Attendance');
+  if (!sh) return null;
+  const v = sh.getDataRange().getValues();
+  const head = v[0].map(h => String(h).trim());
+  const ic = head.indexOf('att_id');
+  const r = v.findIndex((row, k) => k > 0 && String(row[ic]) === String(id));
+  if (r < 1) return null;
+  const o = {};
+  head.forEach((h, k) => { o[h] = v[r][k]; });
+  return {sh: sh, head: head, row: r + 1, o: o};
+}
+
+function attSelfie_(test, id) {
+  try {
+    const it = folder_((test ? 'TEST_' : '') + 'APP_Attendance_Images').getFilesByName(id + '.selfie.jpg');
+    if (!it.hasNext()) return '';
+    const b = it.next().getBlob();
+    return 'data:' + b.getContentType() + ';base64,' + Utilities.base64Encode(b.getBytes());
+  } catch (e) {
+    return '';
+  }
+}
+
+function repName_(email) {
+  const r = table_(ss_().getSheetByName('APP_Reps')).rows.find(x => String(x.rep_email).trim().toLowerCase() === String(email).trim().toLowerCase());
+  return r ? String(r.name || email) : String(email);
+}
+
+function decidePage_(p) {
+  const test = String(p.x || '') === '1';
+  const id = String(p.id || '');
+  const sig = String(p.s || '');
+  let body = '';
+  if (!id || sig !== attSig_(id, test)) body = '<h2>This link is not valid.</h2>';
+  else {
+    const f = attFind_(test, id);
+    if (!f) body = '<h2>Request not found.</h2>';
+    else {
+      const o = f.o;
+      const what = String(o.kind) === 'IN' ? 'Late mark-in' : 'Early mark-out';
+      const when = o.event_time instanceof Date ? Utilities.formatDate(o.event_time, TZ, 'h:mm a, EEE d MMM yyyy') : String(o.event_time);
+      const map = o.gps ? 'https://maps.google.com/?q=' + encodeURIComponent(String(o.gps)) : '';
+      const pic = attSelfie_(test, id);
+      const st = String(o.status) + (o.decided_at instanceof Date ? ' · ' + Utilities.formatDate(o.decided_at, TZ, 'h:mm a, d MMM') : '');
+      body = '<h2>' + (test ? '[TEST] ' : '') + htmlEsc_(repName_(o.rep_email)) + ' – ' + what + '</h2>' +
+        '<p><b>Time:</b> ' + htmlEsc_(when) + '<br><b>Reason:</b> ' + htmlEsc_(o.reason) + '<br><b>Location:</b> ' + (map ? '<a href="' + map + '" target="_blank">open map</a>' : 'not available') + '</p>' +
+        (pic ? '<img src="' + pic + '" style="max-width:100%;width:280px;border-radius:10px">' : '<p>Selfie not available yet.</p>') +
+        '<p><b>Status:</b> <span id="st">' + htmlEsc_(st) + '</span></p>';
+      if (['Pending', 'Approved', 'Rejected'].indexOf(String(o.status)) < 0) body += '<p>This entry was within the rules. Nothing to approve.</p>';
+      else body += '<textarea id="n" rows="2" placeholder="Note for him (optional)">' + htmlEsc_(o.decision_note) + '</textarea>' +
+        '<div class="b"><button class="ok" onclick="go(\'Approved\')">Approve</button><button class="no" onclick="go(\'Rejected\')">Reject</button></div><p id="r"></p>' +
+        '<script>function go(d){var b=document.querySelectorAll("button"),i;for(i=0;i<b.length;i++)b[i].disabled=true;document.getElementById("r").textContent="Saving…";' +
+        'google.script.run.withSuccessHandler(function(res){document.getElementById("st").textContent=res.status+" · "+res.when;document.getElementById("r").textContent=res.status==="Approved"?"Approved. His app updates within a minute.":"Rejected. His app shows this within a minute.";for(i=0;i<b.length;i++)b[i].disabled=false;})' +
+        '.withFailureHandler(function(e){document.getElementById("r").textContent="Could not save: "+(e&&e.message||e);for(i=0;i<b.length;i++)b[i].disabled=false;})' +
+        '.decideAtt(' + JSON.stringify(id) + ',' + JSON.stringify(test ? '1' : '') + ',' + JSON.stringify(sig) + ',d,document.getElementById("n").value);}</script>';
+    }
+  }
+  const css = '<style>body{font-family:Arial,sans-serif;font-size:16px;line-height:1.5;margin:16px;color:#111}h2{font-size:20px}textarea{width:100%;box-sizing:border-box;font-size:16px;padding:8px}.b{display:flex;gap:12px;margin-top:12px}.b button{flex:1;padding:14px;font-size:17px;font-weight:bold;border:0;border-radius:8px;color:#fff}.ok{background:#1b5e20}.no{background:#b00020}button:disabled{opacity:.5}</style>';
+  return HtmlService.createHtmlOutput('<base target="_top">' + css + body).setTitle('Friszon attendance').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function decideAtt(id, x, s, decision, note) {
+  const test = String(x) === '1';
+  if (String(s) !== attSig_(String(id), test)) throw new Error('link not valid');
+  if (['Approved', 'Rejected'].indexOf(decision) < 0) throw new Error('bad decision');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    const f = attFind_(test, id);
+    if (!f) throw new Error('request not found');
+    if (['Pending', 'Approved', 'Rejected'].indexOf(String(f.o.status)) < 0) throw new Error('this entry needs no approval');
+    const now = new Date();
+    const set = {status: decision, decided_at: now, decided_by: 'Ashwin', decision_note: String(note || '').trim().slice(0, 300)};
+    Object.keys(set).forEach(k => { const c = f.head.indexOf(k); if (c > -1) f.sh.getRange(f.row, c + 1).setValue(set[k]); });
+    return {status: decision, when: Utilities.formatDate(now, TZ, 'h:mm a, d MMM')};
   } finally {
     lock.releaseLock();
   }

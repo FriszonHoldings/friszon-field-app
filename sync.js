@@ -92,10 +92,10 @@ async function ffSyncOutbox(onProgress) {
       item.lastTry = Date.now();
       let res;
       try {
-        const payload = Object.assign({}, item.payload, {attempts: item.attempts});
+        const payload = Object.assign({}, item.payload, {attempts: item.attempts, sent_at: new Date().toISOString()});
         const body = Object.assign({op: item.type}, ffCred(session));
         body[item.type] = payload;
-        const id = payload.visit_id || payload.pad_id || payload.dayclose_id || payload.deposit_id || payload.receipt_id || payload.monthclose_id || (payload.prospect_id ? payload.prospect_id + '.' + payload.stage : '') || '';
+        const id = payload.visit_id || payload.pad_id || payload.dayclose_id || payload.deposit_id || payload.receipt_id || payload.monthclose_id || payload.att_id || (payload.prospect_id ? payload.prospect_id + '.' + payload.stage : '') || '';
         const once = () => ffApi(body, 40000, id).catch(e => ({ok: false, error: 'network', detail: String(e && e.message || e)}));
         res = await once();
         if (res && ['retry', 'bad_response', 'network'].indexOf(res.error) > -1) res = await once();
@@ -109,12 +109,13 @@ async function ffSyncOutbox(onProgress) {
         sentLog.unshift({id: item.id, type: item.type, shop_id: pl.shop_id || '', label: item.label || '', saved_at: item.created, sent_at: Date.now(),
           visit_time: pl.visit_time || '', pay_mode: fl.pay_mode || '', amount: fl.amount || 0, paid: (fl.what_happened || []).indexOf('Payment collected') > -1, cheque_date: fl.cheque_date || '', slip_no: fl.slip_no || '', deliver_pending: fl.deliver_pending || '', v2: fl.delivery !== undefined,
           collections: pl.collections || [], close_date: pl.close_date || '', dispatch_id: pl.dispatch_id || '', month: pl.month || '', prospect_id: pl.prospect_id || '', stage: pl.stage || '',
-          prospect: item.type === 'prospect' && pl.stage === 'f1' ? {prospect_id: pl.prospect_id, shop_name: pl.shop_name, pincode: pl.pincode, created_at: pl.saved_at, q8_community: (pl.answers || {}).q8_community || '', q9_shop_type: (pl.answers || {}).q9_shop_type || '', stop: !!pl.stop} : null});
+          prospect: item.type === 'prospect' && pl.stage === 'f1' ? {prospect_id: pl.prospect_id, shop_name: pl.shop_name, pincode: pl.pincode, created_at: pl.saved_at, q8_community: (pl.answers || {}).q8_community || '', q9_shop_type: (pl.answers || {}).q9_shop_type || '', stop: !!pl.stop} : null,
+          att: item.type === 'att' ? {att_id: pl.att_id, kind: pl.kind, event_time: pl.event_time, reason: pl.reason || '', status: res.status || (pl.reason ? 'Pending' : 'OK'), decision_note: ''} : null});
         await ffSet('sentLog', sentLog.slice(0, 200));
         sent++;
       } else {
         item.lastError = (res && (res.error + (res.detail ? ': ' + res.detail : ''))) || 'unknown';
-        item.permanent = !!(res && ['not_your_shop', 'bad_visit', 'bad_pad', 'pad_range', 'pad_overlap', 'bad_dayclose', 'dayclose_exists', 'bad_deposit', 'bad_receipt', 'receipt_exists', 'bad_monthclose', 'monthclose_exists', 'bad_prospect'].indexOf(res.error) > -1);
+        item.permanent = !!(res && ['not_your_shop', 'bad_visit', 'bad_pad', 'pad_range', 'pad_overlap', 'bad_dayclose', 'dayclose_exists', 'bad_deposit', 'bad_receipt', 'receipt_exists', 'bad_monthclose', 'monthclose_exists', 'bad_prospect', 'bad_att', 'att_exists'].indexOf(res.error) > -1);
         await ffOutboxPut(item);
         failed++;
         if (!item.permanent) break;

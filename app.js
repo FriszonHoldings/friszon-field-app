@@ -1,4 +1,4 @@
-const APP_VERSION = '0.6.2';
+const APP_VERSION = '0.7.0';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -190,6 +190,7 @@ function render() {
   if (S.view === 'monthclose' && S.mc) return renderMonthClose();
   if (S.view === 'prospects') return renderProspects();
   if (S.view === 'prospect' && S.pr) return renderProspect();
+  if (S.view === 'att' && S.att) return renderAtt();
   const tabs = [['due', 'Shops Due'], ['all', 'My Shops'], ['sent', 'Sent']];
   let body = '';
   if (!S.data) body = `<div class="empty">${S.loading ? 'Loading your shops…' + (pullTry > 1 ? ' (try ' + pullTry + ')' : '') : 'Could not load your shops yet. Trying again automatically.'}<br><br><button class="btn small ghost" onclick="pullData(true)">Try now</button></div>`;
@@ -218,8 +219,8 @@ function renderList(dueOnly) {
     const done = (r.deliverDue ? '<span class="chip red">Deliver packs</span>' : '') + (r.visitedToday ? '<span class="chip">Visited today</span>' : '');
     return `<button class="shop" onclick="openVisit('${esc(r.shop_id)}')"><div class="name">${esc(r.shop_name)}</div><div class="meta">${esc(r.shop_id)} · ${r.t.last_visit ? 'last visit ' + (r.days === 0 ? 'today' : r.days + ' days ago') : 'never visited'}${r.t.amount_due ? ' · due ' + money(r.t.amount_due) : ''}</div><div class="meta">${esc(r.t.refill_plan || '')}</div>${chips}${done}</button>`;
   }).join('');
-  return `<input class="search" placeholder="Search shop" value="${esc(S.search)}" oninput="S.search=this.value;document.getElementById('list').innerHTML=renderListInner(${dueOnly})">
-    <div id="list">${list || `<div class="empty">${dueOnly ? 'No shops due. Well done.' : 'No shops.'}</div>`}</div>`;
+  return `${attCardHtml()}<input class="search" placeholder="Search shop" value="${esc(S.search)}" oninput="S.search=this.value;document.getElementById('list').innerHTML=renderListInner(${dueOnly})">
+    <div id="list" class="${attLocked() ? 'locked' : ''}">${list || `<div class="empty">${dueOnly ? 'No shops due. Well done.' : 'No shops.'}</div>`}</div>`;
 }
 
 function renderListInner(dueOnly) { const tmp = document.createElement('div'); tmp.innerHTML = renderList(dueOnly); return tmp.querySelector('#list').innerHTML; }
@@ -244,6 +245,7 @@ function renderMenu() {
   const dc = dayClosedToday();
   const n = depositCandidates('Cash').length + depositCandidates('Cheque').length;
   $app.innerHTML = topBar('Menu') + `<main>
+    <button class="shop" onclick="go('due')"><div class="name">Mark in / Mark out</div><div class="meta">${attMenuText()}</div></button>
     <button class="shop" onclick="openDayClose()"><div class="name">Day Close</div><div class="meta">${dc ? 'Done for today ✓' : 'Not done yet today – do it before 7 pm'}</div></button>
     <button class="shop" onclick="openDeposit()"><div class="name">Bank Deposit</div><div class="meta">${n ? n + ' cash/cheque collection' + (n > 1 ? 's' : '') + ' not yet deposited' : 'Nothing waiting to be deposited'}</div></button>
     <button class="shop" onclick="openStock()"><div class="name">Stock Received</div><div class="meta">${stockMenuText()}</div></button>
@@ -483,12 +485,14 @@ function startGeo() {
   S.geoWatch = navigator.geolocation.watchPosition(p => {
     if (!S.geo || p.coords.accuracy < S.geo.accuracy) S.geo = {lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Math.round(p.coords.accuracy)};
     const el = document.getElementById('geo'); if (el) el.innerHTML = geoText();
+    if (S.view === 'att' && S.att) attMissing();
   }, err => { logClient('warn', 'geo', err.message); const el = document.getElementById('geo'); if (el) el.innerHTML = geoText(err.message); }, {enableHighAccuracy: true, maximumAge: 30000, timeout: 30000});
 }
 function stopGeo() { if (S.geoWatch !== null && navigator.geolocation) navigator.geolocation.clearWatch(S.geoWatch); S.geoWatch = null; }
 function geoText(err) { return S.geo ? `📍 Location found (±${S.geo.accuracy} m)` : err ? `📍 Location not available: ${esc(err)}. Allow location for this app.` : '📍 Finding location…'; }
 
 function openVisit(shopId) {
+  if (attLocked()) { toast(attLockMsg(), 4000); window.scrollTo(0, 0); return; }
   S.showAllMissing = false;
   const shop = S.data.shops.find(s => s.shop_id === shopId);
   S.form = {
