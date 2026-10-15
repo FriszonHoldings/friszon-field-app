@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.2';
+const APP_VERSION = '0.7.3';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -246,6 +246,8 @@ function renderMenu() {
   const n = depositCandidates('Cash').length + depositCandidates('Cheque').length;
   $app.innerHTML = topBar('Menu') + `<main>
     <button class="shop" onclick="go('due')"><div class="name">Mark in / Mark out</div><div class="meta">${attMenuText()}</div></button>
+    <button class="shop" onclick="checkLocation()"><div class="name">Check location</div><div class="meta">Tap this if the app says location is blocked or not found</div></button>
+    <div id="loccheck"></div>
     <button class="shop" onclick="openDayClose()"><div class="name">Day Close</div><div class="meta">${dc ? 'Done for today ✓' : 'Not done yet today – do it before 7 pm'}</div></button>
     <button class="shop" onclick="openDeposit()"><div class="name">Bank Deposit</div><div class="meta">${n ? n + ' cash/cheque collection' + (n > 1 ? 's' : '') + ' not yet deposited' : 'Nothing waiting to be deposited'}</div></button>
     <button class="shop" onclick="openStock()"><div class="name">Stock Received</div><div class="meta">${stockMenuText()}</div></button>
@@ -509,7 +511,7 @@ function geoBlocked() { return !S.geo && !!S.geoErr && S.geoErr.code === 1; }
 function stopGeo() { if (S.geoWatch !== null && navigator.geolocation) navigator.geolocation.clearWatch(S.geoWatch); S.geoWatch = null; }
 function geoText() {
   if (S.geo) return `📍 Location found (±${S.geo.accuracy} m)`;
-  if (geoBlocked()) return `<span style="color:var(--red)"><b>📍 Chrome is blocking location for this app.</b> You can still save – nothing is held up. To fix it once: tap the small icon to the left of the web address at the top → Permissions → Location → Allow. If you see no address bar: phone Settings → Apps → Chrome → Permissions → Location → Allow only while using the app.</span>`;
+  if (geoBlocked()) return `<span style="color:var(--red)"><b>📍 Chrome is blocking location for this app.</b> You can still save – nothing is held up. To fix it once: tap the small icon to the left of the web address at the top → Permissions → Location → Allow. If you see no address bar: phone Settings → Apps → Chrome → Permissions → Location → Allow only while using the app. Still blocked? Menu → Check location.</span>`;
   if (S.geoErr) return '📍 Location not found yet (weak signal). Still trying.';
   return '📍 Finding location…';
 }

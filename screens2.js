@@ -426,3 +426,32 @@ async function saveAtt() {
   S.sentLog = (await ffGet('sentLog')) || [];
   render();
 }
+
+async function checkLocation() {
+  const out = document.getElementById('loccheck'); if (!out) return;
+  out.innerHTML = '<div class="warn">Checking location… this can take up to 20 seconds. If Chrome asks, tap Allow.</div>';
+  let perm = 'unknown';
+  try { if (navigator.permissions && navigator.permissions.query) perm = (await navigator.permissions.query({name: 'geolocation'})).state; } catch (e) {}
+  const res = await new Promise(resolve => {
+    if (!navigator.geolocation) return resolve({err: {code: 0, message: 'no location support in this browser'}});
+    try { navigator.geolocation.getCurrentPosition(p => resolve({p: p}), err => resolve({err: err}), {enableHighAccuracy: true, maximumAge: 0, timeout: 20000}); } catch (e) { resolve({err: {code: 0, message: String(e)}}); }
+  });
+  const br = (navigator.userAgent.match(/(EdgA|SamsungBrowser|MiuiBrowser|OPR|Firefox|Chrome)\/[\d.]+/) || [navigator.userAgent.slice(0, 60)])[0];
+  const mode = window.matchMedia && matchMedia('(display-mode: standalone)').matches ? 'home-screen app' : 'browser tab';
+  const info = 'permission=' + perm + ' | ' + (res.p ? 'OK ±' + Math.round(res.p.coords.accuracy) + ' m' : 'error ' + res.err.code + ' ' + (res.err.message || '')) + ' | ' + br + ' | ' + mode + ' | app ' + APP_VERSION;
+  await logClient(res.p ? 'info' : 'warn', 'geo-check', info);
+  flushClientLog().catch(() => {});
+  if (res.p) {
+    S.geo = {lat: res.p.coords.latitude, lng: res.p.coords.longitude, accuracy: Math.round(res.p.coords.accuracy)}; S.geoErr = null;
+    out.innerHTML = '<div class="ok"><b>Location works ✓</b> (±' + Math.round(res.p.coords.accuracy) + ' m). Mark in and shop visits will now record where you are.</div>';
+    return;
+  }
+  let h;
+  if (res.err.code === 1) h = '<div class="err"><b>Location is blocked for this app.</b> Do both steps, then close the app fully, open it again and tap Check location again.<br><br>' +
+    '<b>Step 1 – phone setting:</b> Settings → Apps → Chrome → Permissions → Location → <b>Allow only while using the app</b>. Turn on <b>Use precise location</b> if you see it.<br><br>' +
+    '<b>Step 2 – Chrome setting:</b> open Chrome → tap <b>⋮</b> (three dots, top right) → Settings → Site settings → Location. Make sure Location is <b>on</b> at the top. If <b>friszonholdings.github.io</b> is listed under <b>Blocked</b>, tap it → <b>Allow</b> (or Clear &amp; reset).</div>';
+  else if (res.err.code === 2) h = '<div class="err"><b>The phone could not find your location.</b> Settings → Location → turn it on, then Location services → <b>Google Location Accuracy</b> → on. Then tap Check location again.</div>';
+  else if (res.err.code === 3) h = '<div class="warn"><b>Location took too long.</b> Step outside or near a window, make sure Settings → Location → Google Location Accuracy is on, then tap Check location again.</div>';
+  else h = '<div class="err"><b>This browser does not give location.</b> Open the app in Google Chrome.</div>';
+  out.innerHTML = h + '<div class="small" style="margin:6px 0 10px">Sent to Ashwin: ' + esc(info) + '</div>';
+}
