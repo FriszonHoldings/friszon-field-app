@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -479,17 +479,40 @@ async function doLogin() {
 }
 
 function startGeo() {
-  if (!navigator.geolocation) return;
   stopGeo();
   S.geo = null;
-  S.geoWatch = navigator.geolocation.watchPosition(p => {
+  S.geoErr = null;
+  if (!navigator.geolocation) { S.geoErr = {code: 2, msg: 'no location support'}; return; }
+  const ok = p => {
     if (!S.geo || p.coords.accuracy < S.geo.accuracy) S.geo = {lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Math.round(p.coords.accuracy)};
-    const el = document.getElementById('geo'); if (el) el.innerHTML = geoText();
-    if (S.view === 'att' && S.att) attMissing();
-  }, err => { logClient('warn', 'geo', err.message); const el = document.getElementById('geo'); if (el) el.innerHTML = geoText(err.message); }, {enableHighAccuracy: true, maximumAge: 30000, timeout: 30000});
+    S.geoErr = null;
+    geoRefresh();
+  };
+  const bad = err => {
+    logClient('warn', 'geo', (err && err.code) + ' ' + (err && err.message));
+    if (!S.geo) S.geoErr = {code: err && err.code, msg: String(err && err.message || '')};
+    geoRefresh();
+  };
+  S.geoWatch = navigator.geolocation.watchPosition(ok, bad, {enableHighAccuracy: true, maximumAge: 30000, timeout: 30000});
+  try { navigator.geolocation.getCurrentPosition(ok, () => {}, {enableHighAccuracy: false, maximumAge: 300000, timeout: 20000}); } catch (e) {}
+  try {
+    if (navigator.permissions && navigator.permissions.query) navigator.permissions.query({name: 'geolocation'}).then(st => {
+      if (st.state === 'denied' && !S.geo) { S.geoErr = {code: 1, msg: 'blocked'}; geoRefresh(); logClient('warn', 'geo', 'permission state denied'); }
+    }).catch(() => {});
+  } catch (e) {}
 }
+function geoRefresh() {
+  const el = document.getElementById('geo'); if (el) el.innerHTML = geoText();
+  if (S.view === 'att' && S.att) attMissing();
+}
+function geoBlocked() { return !S.geo && !!S.geoErr && S.geoErr.code === 1; }
 function stopGeo() { if (S.geoWatch !== null && navigator.geolocation) navigator.geolocation.clearWatch(S.geoWatch); S.geoWatch = null; }
-function geoText(err) { return S.geo ? `📍 Location found (±${S.geo.accuracy} m)` : err ? `📍 Location not available: ${esc(err)}. Allow location for this app.` : '📍 Finding location…'; }
+function geoText() {
+  if (S.geo) return `📍 Location found (±${S.geo.accuracy} m)`;
+  if (geoBlocked()) return `<span style="color:var(--red)"><b>📍 Chrome is blocking location for this app.</b> You can still save – nothing is held up. To fix it once: tap the small icon to the left of the web address at the top → Permissions → Location → Allow. If you see no address bar: phone Settings → Apps → Chrome → Permissions → Location → Allow only while using the app.</span>`;
+  if (S.geoErr) return '📍 Location not found yet (weak signal). Still trying.';
+  return '📍 Finding location…';
+}
 
 function openVisit(shopId) {
   if (attLocked()) { toast(attLockMsg(), 4000); window.scrollTo(0, 0); return; }

@@ -304,7 +304,7 @@ async function saveProspect() {
 }
 
 /* ---------- Attendance ---------- */
-const ATT_IN_BY = 600, ATT_OUT_FROM = 1080, ATT_FROM = '2026-10-15';
+const ATT_IN_BY = 600, ATT_OUT_FROM = 1080, ATT_SELFIE_MAX = 10 * 60000, ATT_GEO_WAIT = 30000, ATT_FROM = '2026-10-15';
 let attTick = null;
 function attActive() { return todayKey() >= ATT_FROM; }
 function istMin(d) { const p = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false}).formatToParts(d || new Date()); return (Number(p.find(x => x.type === 'hour').value) % 24) * 60 + Number(p.find(x => x.type === 'minute').value); }
@@ -380,25 +380,28 @@ function openAtt(kind) {
   S.view = 'att'; startGeo(); render(); window.scrollTo(0, 0);
   clearInterval(attTick); attTick = setInterval(() => { if (S.view === 'att' && S.att) renderAtt(true); else clearInterval(attTick); }, 15000);
 }
-function attNeedReason() { const a = S.att, m = istMin(); return workdayToday() && (a.kind === 'IN' ? m >= ATT_IN_BY : m < ATT_OUT_FROM); }
+function attAt() { const a = S.att; return a && a.selfieAt && Date.now() - a.selfieAt < ATT_SELFIE_MAX ? new Date(a.selfieAt) : new Date(); }
+function attNeedReason() { const a = S.att, m = istMin(attAt()); return workdayToday() && (a.kind === 'IN' ? m >= ATT_IN_BY : m < ATT_OUT_FROM); }
 function attTitle() { const late = attNeedReason(); return S.att.kind === 'IN' ? (late ? 'Ask to mark in late' : 'Mark in') : (late ? 'Ask to mark out early' : 'Mark out'); }
 function attValidate() {
   const a = S.att, m = [];
   if (!a.selfie) m.push('Selfie');
-  if (!S.geo && Date.now() - a.opened < 60000) m.push('Location (wait up to a minute)');
+  else if (a.selfieAt && Date.now() - a.selfieAt >= ATT_SELFIE_MAX) m.push('Selfie again (the last one is over 10 minutes old)');
+  if (!S.geo && !geoBlocked() && Date.now() - a.opened < ATT_GEO_WAIT) m.push('Location (wait up to 30 seconds)');
   if (attNeedReason() && String(a.reason).trim().length < 5) m.push('Reason for ' + (a.kind === 'IN' ? 'marking in late' : 'marking out early'));
   return m;
 }
 function attMissing() { const el = document.getElementById('missing'); if (!el) return; const m = attValidate(); el.innerHTML = missingHtml(m, 'attMissing'); document.getElementById('savebtn').textContent = m.length ? 'Save (' + m.length + ' to fill)' : attNeedReason() ? 'Send request to Ashwin' : attTitle(); }
 function attSelfie() {
   const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.capture = 'user';
-  input.onchange = async () => { const file = input.files && input.files[0]; if (!file) return; try { S.att.selfie = await compress(file); renderAtt(true); } catch (e) { logClient('error', 'selfie', String(e)); toast('Photo failed. Try again.'); } };
+  input.onchange = async () => { const file = input.files && input.files[0]; if (!file) return; try { S.att.selfie = await compress(file); S.att.selfieAt = Date.now(); renderAtt(true); } catch (e) { logClient('error', 'selfie', String(e)); toast('Photo failed. Try again.'); } };
   input.click();
 }
 function renderAtt(keep) {
   const y = window.scrollY, a = S.att, need = attNeedReason();
-  const noGeoOk = !S.geo && Date.now() - a.opened >= 60000;
-  let h = topBar(attTitle(), 'cancelAtt()') + `<main><div class="card"><div class="clock">${hm(new Date().toISOString())}</div><div class="small" style="text-align:center">${new Date().toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata'})}</div></div>`;
+  const noGeoOk = !S.geo && !geoBlocked() && Date.now() - a.opened >= ATT_GEO_WAIT;
+  const stamp = a.selfie && a.selfieAt && Date.now() - a.selfieAt < ATT_SELFIE_MAX ? `<div class="ok" style="text-align:center">Selfie taken at <b>${hm(new Date(a.selfieAt).toISOString())}</b> – this is your ${a.kind === 'IN' ? 'mark-in' : 'mark-out'} time.</div>` : '';
+  let h = topBar(attTitle(), 'cancelAtt()') + `<main><div class="card"><div class="clock">${hm(new Date().toISOString())}</div><div class="small" style="text-align:center">${new Date().toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata'})}</div>${stamp}</div>`;
   if (need) h += `<div class="warn">${a.kind === 'IN' ? 'It is past 10 am. Ashwin must approve this late mark-in. Your shop visits stay locked until he does.' : 'It is before 6 pm. Ashwin must approve this early mark-out. Your shop visits pause until he answers.'}</div>`;
   h += `<div class="card"><label class="field">Selfie (front camera, your face clearly visible)</label><div class="photo selfie">${a.selfie ? `<img src="${a.selfie}">` : ''}<button class="btn small ${a.selfie ? 'ghost' : ''}" onclick="attSelfie()">${a.selfie ? 'Retake selfie' : 'Take selfie'}</button></div>
     <div id="geo" class="small" style="margin-top:12px">${geoText()}</div>${noGeoOk ? '<div class="warn">No location yet. You can still save; Ashwin will see that location was missing.</div>' : ''}`;
@@ -411,7 +414,7 @@ function cancelAtt() { stopGeo(); clearInterval(attTick); S.att = null; go('due'
 async function saveAtt() {
   const m = attValidate();
   if (m.length) { S.showAllMissing = true; renderAtt(true); toast('Fill the items listed in red first'); return; }
-  const a = S.att, g = S.geo, need = attNeedReason(), at = new Date().toISOString();
+  const a = S.att, g = S.geo, need = attNeedReason(), at = attAt().toISOString();
   const payload = {att_id: a.att_id, kind: a.kind, event_time: at, selfie: a.selfie, gps: g ? g.lat.toFixed(6) + ', ' + g.lng.toFixed(6) : '', gps_accuracy: g ? g.accuracy : '', reason: need ? String(a.reason).trim() : '', app_version: APP_VERSION};
   const label = (a.kind === 'IN' ? (need ? 'Late mark-in request' : 'Mark in') : (need ? 'Early mark-out request' : 'Mark out')) + ' ' + hm(at);
   await ffOutboxPut({id: a.att_id, type: 'att', payload: payload, created: Date.now(), label: label});
