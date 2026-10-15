@@ -1,4 +1,4 @@
-const CACHE = 'ff-shell-v17';
+const CACHE = 'ff-shell-v18';
 const SHELL = ['./', './index.html', './app.js', './screens2.js', './sync.js', './styles.css', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 importScripts('./sync.js');

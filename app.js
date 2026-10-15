@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.7.2';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -165,7 +165,7 @@ function shopRows() {
     const days = daysSince(t.last_visit);
     const pv = prevVisit(s.shop_id);
     const deliverDue = !visited[s.shop_id] && !!pv && hasKeys(pv.pending);
-    const due = !visited[s.shop_id] && (!t.last_visit || days >= DUE_DAYS || /Collect/.test(t.flag || '') || deliverDue);
+    const due = !visited[s.shop_id] && (!t.last_visit || days >= DUE_DAYS || /Collect/.test(t.flag || ''));
     return Object.assign({}, s, {t: t, days: days, due: due, deliverDue: deliverDue, visitedToday: !!visited[s.shop_id]});
   });
 }
