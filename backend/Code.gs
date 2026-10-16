@@ -1,4 +1,4 @@
-const API_VERSION = '1.12.0';
+const API_VERSION = '1.12.1';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const API_URL_ = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
 const ADMIN_EMAIL_ = 'bujji.prabhu@gmail.com';
@@ -6,6 +6,7 @@ const ATT_HEAD_ = ['att_id', 'rep_email', 'att_date', 'kind', 'event_time', 'pho
 const ATT_IN_BY_ = 600;
 const ATT_OUT_FROM_ = 1080;
 const ATT_SKEW_OK_ = 120;
+const ATT_WAIVED_ = ['elafisheee24@gmail.com|2026-10-15'];
 const APP_FOLDER_PATH = ['appsheet', 'data', 'FriszonField-614282017'];
 const TZ = 'Asia/Kolkata';
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -811,7 +812,7 @@ function attMissed_(rows, email, key) {
   const day = rows.filter(r => String(r.rep_email).trim().toLowerCase() === email && r.att_date instanceof Date && Utilities.formatDate(r.att_date, TZ, 'yyyy-MM-dd') === prev);
   const inOk = day.some(r => String(r.kind) === 'IN' && ['OK', 'Approved'].indexOf(String(r.status)) > -1);
   const outDone = day.some(r => String(r.kind) === 'OUT' && ['OK', 'Approved', 'Pending'].indexOf(String(r.status)) > -1);
-  return {date: prev, label: prev ? Utilities.formatDate(new Date(prev + 'T12:00:00+05:30'), TZ, 'EEE d MMM') : '', missed: !!prev && inOk && !outDone};
+  return {date: prev, label: prev ? Utilities.formatDate(new Date(prev + 'T12:00:00+05:30'), TZ, 'EEE d MMM') : '', missed: !!prev && inOk && !outDone && ATT_WAIVED_.indexOf(email + '|' + prev) < 0};
 }
 
 function attWhat_(o) {
