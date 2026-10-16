@@ -1,4 +1,4 @@
-const API_VERSION = '1.12.1';
+const API_VERSION = '1.12.2';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const API_URL_ = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
 const ADMIN_EMAIL_ = 'bujji.prabhu@gmail.com';
@@ -73,11 +73,19 @@ function handle_(req) {
     else res = {ok: false, error: 'unknown_op'};
     res.ms = Date.now() - started;
     res.prof = PROF_.join(' ');
+    if (res && res.ok === false && req.op !== 'bootstrap') { try { refusal_(rep, req, res); } catch (e3) {} }
     return out_(res);
   } catch (err) {
     try { serverError_(req, err); } catch (e2) {}
     return out_({ok: false, error: 'server', detail: String(err && err.message || err)});
   }
+}
+
+function refusal_(rep, req, res) {
+  const sh = ss_().getSheetByName('APP_ClientLog');
+  if (!sh) return;
+  const body = req[req.op] || {};
+  sh.appendRow([new Date(), rep.email, 'server', 'refused', String(req.op) + (req.viaGet ? ' (bounced GET)' : ''), JSON.stringify({error: res.error, detail: res.detail || '', id: req.id || body.att_id || body.visit_id || '', kind: body.kind || '', event_time: body.event_time || '', attempts: body.attempts || ''}).slice(0, 1500)]);
 }
 
 function out_(obj) {
