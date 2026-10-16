@@ -18,7 +18,8 @@ function attendanceFlags_(o) {
   const outLive = rows.filter(r => String(r.kind) === 'OUT' && String(r.status) !== 'Rejected').pop() || null;
   rows.forEach(r => {
     const kind = String(r.kind) === 'IN' ? 'mark-in' : 'mark-out';
-    if (String(r.rule) === 'Late') o.red.push('Late mark-in at ' + t(r.event_time) + ' – ' + who(r) + '.' + why(r) + note(r) + (String(r.status) === 'Rejected' ? ' Day marked absent.' : ''));
+    const inLbl = {'Late': 'Late mark-in', 'Missed mark-out': 'Mark-in after a missed mark-out', 'Late, missed mark-out': 'Late mark-in after a missed mark-out'}[String(r.rule)];
+    if (inLbl) o.red.push(inLbl + ' at ' + t(r.event_time) + ' – ' + who(r) + '.' + why(r) + note(r) + (String(r.status) === 'Rejected' ? ' Day marked absent.' : ''));
     if (String(r.rule) === 'Early') o.red.push('Asked to mark out early at ' + t(r.event_time) + ' – ' + who(r) + '.' + why(r) + note(r));
     const skew = Number(r.clock_skew_sec) || 0;
     if (Math.abs(skew) > 120) o.red.push('Phone clock was ' + Math.round(Math.abs(skew) / 60) + ' min ' + (skew > 0 ? 'slow' : 'fast') + ' at ' + kind + '. The time shown is corrected to the office clock.');
@@ -36,8 +37,8 @@ function attendanceFlags_(o) {
     if (pr.some(r => String(r.kind) === 'IN' && ok(r)) && !pr.some(r => String(r.kind) === 'OUT' && ok(r))) o.red.push('No mark-out on ' + Utilities.formatDate(new Date(prev + 'T12:00:00+05:30'), tz, 'EEE d MMM') + '.');
   }
   if (!inR) return workday ? '<span style="color:#b00020"><b>No mark-in</b></span>' : 'Sunday – no mark-in needed';
-  if (String(inR.status) === 'Rejected') return '<span style="color:#b00020"><b>Absent</b></span> – late mark-in at ' + t(inR.event_time) + ' rejected by you';
-  let line = 'In ' + t(inR.event_time) + map(inR.gps) + (String(inR.rule) === 'Late' ? ' – late, ' + who(inR) : '');
+  if (String(inR.status) === 'Rejected') return '<span style="color:#b00020"><b>Absent</b></span> – mark-in at ' + t(inR.event_time) + ' rejected by you';
+  let line = 'In ' + t(inR.event_time) + map(inR.gps) + (/Late|Missed/.test(String(inR.rule)) ? ' – ' + String(inR.rule).toLowerCase() + ', ' + who(inR) : '');
   if (outLive) {
     const mins = Math.max(0, Math.round((ms(outLive.event_time) - ms(inR.event_time)) / 60000));
     line += ' · Out ' + t(outLive.event_time) + map(outLive.gps) + (String(outLive.rule) === 'Early' ? ' – early, ' + who(outLive) : '') + ' · ' + Math.floor(mins / 60) + ' h ' + (mins % 60) + ' min';

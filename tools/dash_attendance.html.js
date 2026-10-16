@@ -12,17 +12,18 @@ function attBits(r, label) {
   const p = attGps(r.gps);
   return '<a class="link" data-photo="' + esc(r.selfie) + '" data-cap="' + esc(label + ' selfie · ' + dlab(dk(r.event_time)) + ' ' + attWhen(r)) + '">selfie</a> · ' + (p ? mapLink(p) : '<span class="pill red">no location</span>');
 }
+function attLbl(rule) { return {'Late': 'late', 'Early': 'early', 'Missed mark-out': 'missed mark-out', 'Late, missed mark-out': 'late + missed mark-out'}[rule] || 'early'; }
 function attPill(r) {
   const st = String(r.status), rule = String(r.rule);
-  if (st === 'Pending') return ' <span class="pill amber">' + (rule === 'Late' ? 'late' : 'early') + ' – waiting</span>';
-  if (st === 'Approved') return ' <span class="pill amber">' + (rule === 'Late' ? 'late' : 'early') + ' – approved</span>';
-  if (st === 'Rejected') return ' <span class="pill red">' + (rule === 'Late' ? 'late' : 'early') + ' – rejected</span>';
+  if (st === 'Pending') return ' <span class="pill amber">' + attLbl(rule) + ' – waiting</span>';
+  if (st === 'Approved') return ' <span class="pill amber">' + attLbl(rule) + ' – approved</span>';
+  if (st === 'Rejected') return ' <span class="pill red">' + attLbl(rule) + ' – rejected</span>';
   return '';
 }
 function attReqHtml(r) {
   const rep = repOf(low(r.rep_email)) || {};
   const id = String(r.att_id);
-  const what = String(r.kind) === 'IN' ? 'Late mark-in' : 'Early mark-out';
+  const what = String(r.kind) === 'IN' ? ({'Missed mark-out': 'Mark-in after a missed mark-out', 'Late, missed mark-out': 'Late mark-in after a missed mark-out'}[String(r.rule)] || 'Late mark-in') : 'Early mark-out';
   const skew = Math.abs(num(r.clock_skew_sec)) > 120 ? '<div class="small" style="color:var(--red)">Phone clock was ' + Math.round(Math.abs(num(r.clock_skew_sec)) / 60) + ' min off – time corrected to the office clock.</div>' : '';
   return '<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">' +
     '<div><b>' + esc(rep.name || r.rep_email) + '</b>' + (r._test ? ' <span class="pill mute">TEST</span>' : '') + ' – ' + what + ' at <b>' + attWhen(r) + '</b>, ' + dlab(dk(r.event_time)) + '</div>' +
@@ -60,7 +61,7 @@ function viewAtt() {
     const m = inR && outR && !isAbsent ? Math.max(0, Math.round((new Date(outR.event_time) - new Date(inR.event_time)) / 60000)) : null;
     if (!isAbsent) worked++;
     else if (k < todayKey() || inR) absent++;
-    if (inR && String(inR.rule) === 'Late') late++;
+    if (inR && /Late/.test(String(inR.rule))) late++;
     if (rs.some(r => String(r.rule) === 'Early')) early++;
     if (m !== null) { mins += m; paired++; }
     const notes = [];
