@@ -1,4 +1,4 @@
-const API_VERSION = '1.11.0';
+const API_VERSION = '1.12.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const API_URL_ = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
 const ADMIN_EMAIL_ = 'bujji.prabhu@gmail.com';
@@ -384,11 +384,12 @@ function bootstrap_(rep) {
   const attendance = rowsOf(rep.test ? 'TEST_APP_Attendance' : 'APP_Attendance')
     .filter(r => String(r.rep_email).trim().toLowerCase() === me && r.att_date instanceof Date && Utilities.formatDate(r.att_date, TZ, 'yyyy-MM-dd') === todayKey)
     .map(r => ({att_id: String(r.att_id), kind: String(r.kind), event_time: iso_(r.event_time), rule: String(r.rule || ''), reason: String(r.reason || ''), status: String(r.status || ''), decision_note: String(r.decision_note || '')}));
+  const attPrev = attMissed_(rowsOf(rep.test ? 'TEST_APP_Attendance' : 'APP_Attendance'), me, todayKey);
   return {
     ok: true, version: API_VERSION, now: new Date().toISOString(), rep: rep, test: !!rep.test, shops: shops, today: today,
     products: products, invoices: invoices, last: last, pads: pads, usedSlips: usedSlips, usedRefs: usedRefs, visitedToday: visitedToday, depositable: depositable, dayClosed: dayCloses.indexOf(todayKey) > -1, todayDate: todayKey,
     dispatches: Object.keys(dispBy).map(k => dispBy[k]), monthClose: {month: mc.month, label: mc.label, open: mc.open, done: mcDone, opens: mc.opens}, prospects: prospects,
-    attendance: attendance, workday: Number(Utilities.formatDate(new Date(), TZ, 'u')) <= 6
+    attendance: attendance, attPrev: attPrev, workday: Number(Utilities.formatDate(new Date(), TZ, 'u')) <= 6
   };
 }
 
@@ -797,6 +798,30 @@ function attStatusOf_(sh, id) {
   return r ? {status: String(r.status), rule: String(r.rule)} : {};
 }
 
+function attPrevDay_(key) {
+  for (let k = 1; k < 8; k++) {
+    const d = new Date(new Date(key + 'T12:00:00+05:30').getTime() - k * 86400000);
+    if (Number(Utilities.formatDate(d, TZ, 'u')) <= 6) return Utilities.formatDate(d, TZ, 'yyyy-MM-dd');
+  }
+  return '';
+}
+
+function attMissed_(rows, email, key) {
+  const prev = attPrevDay_(key);
+  const day = rows.filter(r => String(r.rep_email).trim().toLowerCase() === email && r.att_date instanceof Date && Utilities.formatDate(r.att_date, TZ, 'yyyy-MM-dd') === prev);
+  const inOk = day.some(r => String(r.kind) === 'IN' && ['OK', 'Approved'].indexOf(String(r.status)) > -1);
+  const outDone = day.some(r => String(r.kind) === 'OUT' && ['OK', 'Approved', 'Pending'].indexOf(String(r.status)) > -1);
+  return {date: prev, label: prev ? Utilities.formatDate(new Date(prev + 'T12:00:00+05:30'), TZ, 'EEE d MMM') : '', missed: !!prev && inOk && !outDone};
+}
+
+function attWhat_(o) {
+  const rule = String(o.rule || '');
+  if (String(o.kind) !== 'IN') return 'early mark-out';
+  if (rule === 'Missed mark-out') return 'mark-in after a missed mark-out';
+  if (rule === 'Late, missed mark-out') return 'late mark-in after a missed mark-out';
+  return 'late mark-in';
+}
+
 function saveAtt_(rep, a) {
   if (!a || !a.att_id || ['IN', 'OUT'].indexOf(a.kind) < 0) return {ok: false, error: 'bad_att', detail: 'missing id or kind'};
   const phoneTime = new Date(a.event_time);
@@ -811,11 +836,17 @@ function saveAtt_(rep, a) {
   const used = Math.abs(skew) > ATT_SKEW_OK_ ? new Date(phoneTime.getTime() + skew * 1000) : phoneTime;
   const p = istParts_(used);
   const workday = p.dow <= 6;
-  const rule = a.kind === 'IN' ? (!workday ? 'Sunday' : p.min < ATT_IN_BY_ ? 'On time' : 'Late') : (!workday ? 'Sunday' : p.min >= ATT_OUT_FROM_ ? 'After 6 pm' : 'Early');
-  const pending = rule === 'Late' || rule === 'Early';
+  const base = a.kind === 'IN' ? (!workday ? 'Sunday' : p.min < ATT_IN_BY_ ? 'On time' : 'Late') : (!workday ? 'Sunday' : p.min >= ATT_OUT_FROM_ ? 'After 6 pm' : 'Early');
+  const late = base === 'Late' || base === 'Early';
   let reason = String(a.reason || '').trim();
-  if (pending && reason.length < 5 && used !== phoneTime) reason = 'No reason given – his phone clock was ' + Math.round(Math.abs(skew) / 60) + ' min ' + (skew > 0 ? 'slow' : 'fast') + ', so the app treated this as within time';
-  if (pending && reason.length < 5) return {ok: false, error: 'bad_att', detail: 'reason needed for ' + (a.kind === 'IN' ? 'a late mark-in' : 'an early mark-out')};
+  if (late && reason.length < 5 && used !== phoneTime) reason = 'No reason given – his phone clock was ' + Math.round(Math.abs(skew) / 60) + ' min ' + (skew > 0 ? 'slow' : 'fast') + ', so the app treated this as within time';
+  if (late && reason.length < 5) return {ok: false, error: 'bad_att', detail: 'reason needed for ' + (a.kind === 'IN' ? 'a late mark-in' : 'an early mark-out')};
+  const miss = a.kind === 'IN' && workday ? attMissed_(table_(sh).rows, rep.email, p.date) : {missed: false};
+  const missReason = String(a.missed_reason || '').trim();
+  if (miss.missed && missReason.length < 5) return {ok: false, error: 'bad_att', detail: 'reason needed for the missed mark-out on ' + miss.label};
+  if (miss.missed) reason = 'No mark-out on ' + miss.label + ': ' + missReason + (late ? ' | Late: ' + reason : '');
+  const rule = miss.missed ? (late ? 'Late, missed mark-out' : 'Missed mark-out') : base;
+  const pending = late || miss.missed;
   const o = {att_id: a.att_id, rep_email: rep.email, att_date: new Date(p.date + 'T00:00:00+05:30'), kind: a.kind, event_time: used, phone_time: phoneTime, clock_skew_sec: skew, received_at: now,
     gps: a.gps || '', gps_accuracy: a.gps_accuracy || '', selfie: photoPath_(rep, 'APP_Attendance_Images', a.att_id, 'selfie'), rule: rule, reason: reason, status: pending ? 'Pending' : 'OK', app_version: a.app_version || ''};
   const lock = LockService.getScriptLock();
@@ -850,7 +881,7 @@ function htmlEsc_(s) {
 
 function attNotify_(rep, o, selfie) {
   try {
-    const what = o.kind === 'IN' ? 'late mark-in' : 'early mark-out';
+    const what = attWhat_(o);
     const when = Utilities.formatDate(o.event_time, TZ, 'h:mm a, EEE d MMM');
     const link = API_URL_ + '?op=decide&id=' + encodeURIComponent(o.att_id) + (rep.test ? '&x=1' : '') + '&s=' + attSig_(o.att_id, rep.test);
     const map = o.gps ? 'https://maps.google.com/?q=' + encodeURIComponent(o.gps) : '';
@@ -909,7 +940,7 @@ function decidePage_(p) {
     if (!f) body = '<h2>Request not found.</h2>';
     else {
       const o = f.o;
-      const what = String(o.kind) === 'IN' ? 'Late mark-in' : 'Early mark-out';
+      const what = attWhat_(o).replace(/^./, c => c.toUpperCase());
       const when = o.event_time instanceof Date ? Utilities.formatDate(o.event_time, TZ, 'h:mm a, EEE d MMM yyyy') : String(o.event_time);
       const map = o.gps ? 'https://maps.google.com/?q=' + encodeURIComponent(String(o.gps)) : '';
       const pic = attSelfie_(test, id);
