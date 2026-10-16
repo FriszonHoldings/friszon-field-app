@@ -110,7 +110,7 @@ async function ffSyncOutbox(onProgress) {
           visit_time: pl.visit_time || '', pay_mode: fl.pay_mode || '', amount: fl.amount || 0, paid: (fl.what_happened || []).indexOf('Payment collected') > -1, cheque_date: fl.cheque_date || '', slip_no: fl.slip_no || '', deliver_pending: fl.deliver_pending || '', v2: fl.delivery !== undefined,
           collections: pl.collections || [], close_date: pl.close_date || '', dispatch_id: pl.dispatch_id || '', month: pl.month || '', prospect_id: pl.prospect_id || '', stage: pl.stage || '',
           prospect: item.type === 'prospect' && pl.stage === 'f1' ? {prospect_id: pl.prospect_id, shop_name: pl.shop_name, pincode: pl.pincode, created_at: pl.saved_at, q8_community: (pl.answers || {}).q8_community || '', q9_shop_type: (pl.answers || {}).q9_shop_type || '', stop: !!pl.stop} : null,
-          att: item.type === 'att' ? {att_id: pl.att_id, kind: pl.kind, event_time: pl.event_time, reason: pl.reason || '', status: res.status || (pl.reason ? 'Pending' : 'OK'), decision_note: ''} : null});
+          att: item.type === 'att' ? {att_id: pl.att_id, kind: pl.kind, event_time: pl.event_time, reason: pl.reason || '', status: res.status || (pl.reason || pl.missed_reason ? 'Pending' : 'OK'), decision_note: ''} : null});
         await ffSet('sentLog', sentLog.slice(0, 200));
         sent++;
       } else {
