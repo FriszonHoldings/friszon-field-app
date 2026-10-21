@@ -1,4 +1,4 @@
-const API_VERSION = '1.12.2';
+const API_VERSION = '1.12.3';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const API_URL_ = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
 const ADMIN_EMAIL_ = 'bujji.prabhu@gmail.com';
@@ -464,7 +464,7 @@ function saveReceipt_(rep, r) {
     const head = ensureCols_(sh, cols);
     sh.appendRow(rowFor_(head, o));
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
   receiptPhotos_(rep, r);
   return {ok: true, receipt_id: r.receipt_id};
@@ -500,7 +500,7 @@ function saveMonthClose_(rep, m) {
     const head = ensureCols_(sh, skus.map(s => 'stock_' + s));
     sh.appendRow(rowFor_(head, o));
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
   return {ok: true, monthclose_id: m.monthclose_id};
 }
@@ -577,7 +577,7 @@ function saveProspect_(rep, p) {
       if (pc > -1) sh.getRange(r, pc + 1).setNumberFormat('@').setValue(String(p.pincode));
       if (mc > -1) sh.getRange(r, mc + 1).setNumberFormat('@').setValue(String(p.owner_mobile));
     } finally {
-      lock.releaseLock();
+      SpreadsheetApp.flush(); lock.releaseLock();
     }
     prospectPhotos_(rep, p);
     return {ok: true, prospect_id: p.prospect_id};
@@ -616,7 +616,7 @@ function saveProspect_(rep, p) {
     }
     Object.keys(set).forEach(k => { const c = ci(k); if (c > -1) sh.getRange(r + 1, c + 1).setValue(set[k]); });
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
   prospectPhotos_(rep, p);
   return {ok: true, prospect_id: p.prospect_id, stage: p.stage};
@@ -739,7 +739,7 @@ function saveVisit_(rep, v) {
     syncLog_(ss, rep, v);
     mark_('log');
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
   visitPhotos_(rep, v);
   mark_('photos');
@@ -777,7 +777,7 @@ function saveDayClose_(rep, d) {
     sh.appendRow(rowFor_(headOf_(sh), o));
     return {ok: true, cash: o.cash_collected_calc, cheques: cheques};
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
 }
 
@@ -873,7 +873,7 @@ function saveAtt_(rep, a) {
     }
     sh.appendRow(rowFor_(ensureCols_(sh, ATT_HEAD_), o));
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
   attPhoto_(rep, a);
   if (pending) attNotify_(rep, o, a.selfie);
@@ -983,10 +983,11 @@ function decideAtt(id, x, s, decision, note) {
     if (['Pending', 'Approved', 'Rejected'].indexOf(String(f.o.status)) < 0) throw new Error('this entry needs no approval');
     const now = new Date();
     const set = {status: decision, decided_at: now, decided_by: 'Ashwin', decision_note: String(note || '').trim().slice(0, 300)};
-    Object.keys(set).forEach(k => { const c = f.head.indexOf(k); if (c > -1) f.sh.getRange(f.row, c + 1).setValue(set[k]); });
+    const idc = f.head.indexOf('att_id');
+    f.sh.getDataRange().getValues().forEach((row, k) => { if (k > 0 && String(row[idc]) === String(id)) Object.keys(set).forEach(key => { const c = f.head.indexOf(key); if (c > -1) f.sh.getRange(k + 1, c + 1).setValue(set[key]); }); });
     return {status: decision, when: Utilities.formatDate(now, TZ, 'h:mm a, d MMM')};
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
 }
 
@@ -1044,7 +1045,7 @@ function saveDeposit_(rep, d) {
       (l.splits || []).forEach((x, j) => sSh.appendRow(rowFor_(sHead, {split_id: lineId + '-S' + (j + 1), line_id: lineId, invoice_no: x.invoice_no, amount: Number(x.amount), balance_reason: x.balance_reason || '', rep_email: rep.email, created_at: created})));
     });
   } finally {
-    lock.releaseLock();
+    SpreadsheetApp.flush(); lock.releaseLock();
   }
   depositPhoto_(rep, d);
   return {ok: true, deposit_id: d.deposit_id};
@@ -1080,7 +1081,7 @@ function savePad_(rep, p) {
   const o = {pad_id: p.pad_id, rep_email: rep.email, first_no: first, last_no: last, first_slip_photo: photo, received_time: new Date(p.saved_at || Date.now())};
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
-  try { sh.appendRow(t.head.map(h => Object.prototype.hasOwnProperty.call(o, h) ? o[h] : '')); } finally { lock.releaseLock(); }
+  try { sh.appendRow(t.head.map(h => Object.prototype.hasOwnProperty.call(o, h) ? o[h] : '')); } finally { SpreadsheetApp.flush(); lock.releaseLock(); }
   return {ok: true, pad_id: p.pad_id};
 }
 

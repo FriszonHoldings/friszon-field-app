@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.4';
+const APP_VERSION = '0.7.5';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -94,7 +94,7 @@ async function syncNow() {
   }
   if (!S.outbox.filter(x => !x.permanent).length && navigator.onLine && S.view !== 'visit') await pullData(false);
   flushClientLog();
-  if ('serviceWorker' in navigator && S.outbox.length) {
+  if ('serviceWorker' in navigator && S.outbox.some(x => !x.permanent)) {
     navigator.serviceWorker.ready.then(r => r.sync && r.sync.register('ff-outbox')).catch(() => {});
   }
 }

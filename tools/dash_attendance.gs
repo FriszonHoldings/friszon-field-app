@@ -14,7 +14,8 @@ function attDecideDash(id, decision, note, test) {
     if (['Pending', 'Approved', 'Rejected'].indexOf(String(v[r][sc])) < 0) throw new Error('This entry was within the rules – nothing to approve.');
     const now = new Date();
     const set = {status: decision, decided_at: now, decided_by: 'Ashwin (dashboard)', decision_note: String(note || '').trim().slice(0, 300)};
-    Object.keys(set).forEach(k => { const c = head.indexOf(k); if (c > -1) sh.getRange(r + 1, c + 1).setValue(set[k]); });
+    v.forEach((row, k) => { if (k > 0 && String(row[ic]) === String(id)) Object.keys(set).forEach(key => { const c = head.indexOf(key); if (c > -1) sh.getRange(k + 1, c + 1).setValue(set[key]); }); });
+    SpreadsheetApp.flush();
     return JSON.stringify({status: decision, decided_at: now.toISOString(), decision_note: set.decision_note});
   } finally {
     lock.releaseLock();

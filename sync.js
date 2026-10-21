@@ -73,16 +73,63 @@ function ffCred(session) {
 }
 
 let ffSyncing = false;
+const FF_LOCK_MS = 120000;
+const FF_PERM_RETRY_MS = 30 * 60000;
+const ffLockId = Math.random().toString(36).slice(2);
+
+// One sender at a time across the page and the service worker, so the same item is never posted twice at once.
+async function ffLock(take) {
+  const db = await ffOpenDb();
+  return new Promise(resolve => {
+    let got = false;
+    const tx = db.transaction('kv', 'readwrite');
+    const st = tx.objectStore('kv');
+    const r = st.get('syncLock');
+    r.onsuccess = () => {
+      const cur = r.result, now = Date.now();
+      const free = !cur || cur.until < now || cur.by === ffLockId;
+      if (take && free) { st.put({by: ffLockId, until: now + FF_LOCK_MS}, 'syncLock'); got = true; }
+      if (!take && cur && cur.by === ffLockId) st.delete('syncLock');
+    };
+    tx.oncomplete = () => { db.close(); resolve(got); };
+    tx.onerror = tx.onabort = () => { db.close(); resolve(false); };
+  });
+}
+
+function ffDayKey(iso) {
+  const d = new Date(new Date(iso).getTime() + 330 * 60000);
+  return isNaN(d) ? '' : d.toISOString().slice(0, 10);
+}
+
+// A rejected attendance entry that can never go through from the phone: already recorded, or a mark-in for a day that is over.
+function ffDeadAtt(item) {
+  if (item.type !== 'att' || !item.permanent) return false;
+  if (/^att_exists/.test(item.lastError || '')) return true;
+  const pl = item.payload || {};
+  return pl.kind === 'IN' && ffDayKey(pl.event_time) < ffDayKey(new Date().toISOString());
+}
 
 async function ffSyncOutbox(onProgress) {
   if (ffSyncing) return {busy: true};
   ffSyncing = true;
-  let sent = 0, failed = 0;
+  let sent = 0, failed = 0, locked = false;
   try {
     const session = await ffGet('session');
     if (!session || !session.t) return {sent: 0, failed: 0};
+    locked = await ffLock(true);
+    if (!locked) return {busy: true};
     const items = (await ffOutboxAll()).sort((a, b) => a.created - b.created);
     for (const item of items) {
+      if (ffDeadAtt(item)) {
+        await ffOutboxDelete(item.id);
+        const dropped = (await ffGet('droppedLog')) || [];
+        dropped.unshift({id: item.id, type: item.type, label: item.label || '', error: item.lastError || '', attempts: item.attempts || 0, payload: Object.assign({}, item.payload, {selfie: ''}), dropped_at: Date.now()});
+        await ffSet('droppedLog', dropped.slice(0, 50));
+        if (onProgress) onProgress();
+        continue;
+      }
+      if (item.permanent && Date.now() - (item.lastTry || 0) < FF_PERM_RETRY_MS) { failed++; continue; }
+      await ffLock(true);
       if (item.type === 'prospect' && item.payload.stage !== 'f1' && items.some(x => x.type === 'prospect' && x.permanent && x.payload.prospect_id === item.payload.prospect_id && x.id !== item.id)) {
         if (!item.permanent) { item.permanent = true; item.lastError = 'bad_prospect: Form 1 of this shop was rejected'; await ffOutboxPut(item); }
         failed++;
@@ -123,6 +170,7 @@ async function ffSyncOutbox(onProgress) {
       if (onProgress) onProgress();
     }
   } finally {
+    if (locked) await ffLock(false);
     ffSyncing = false;
   }
   return {sent: sent, failed: failed};
