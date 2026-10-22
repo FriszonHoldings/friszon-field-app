@@ -38,6 +38,16 @@ async function ffOutboxAll() { return ffTx('outbox', 'readonly', st => ffReq(st.
 async function ffOutboxPut(item) { return ffTx('outbox', 'readwrite', st => ffReq(st.put(item))); }
 async function ffOutboxDelete(id) { return ffTx('outbox', 'readwrite', st => ffReq(st.delete(id))); }
 
+// Every call to the office is noted on the phone: the time of the last answer, and a short list of calls that failed.
+async function ffNet(op, err) {
+  try {
+    if (!err) { await ffSet('lastContact', Date.now()); return; }
+    const n = (await ffGet('netLog')) || [];
+    n.push({at: Date.now(), op: String(op || ''), err: String(err).slice(0, 80)});
+    await ffSet('netLog', n.slice(-30));
+  } catch (e) {}
+}
+
 function ffQuery(params) {
   return Object.keys(params).filter(k => params[k] !== undefined && params[k] !== null && params[k] !== '').map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k])).join('&');
 }
@@ -49,7 +59,13 @@ async function ffApi(body, timeoutMs, id) {
     const url = FF_API_URL + '?' + ffQuery({op: body.op, id: id, u: body.u, t: body.t});
     const res = await fetch(url, {method: 'POST', body: JSON.stringify(body), headers: {'Content-Type': 'text/plain;charset=utf-8'}, signal: ctrl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store'});
     const text = await res.text();
-    try { return JSON.parse(text); } catch (e) { return {ok: false, error: 'bad_response', detail: text.slice(0, 200)}; }
+    let out;
+    try { out = JSON.parse(text); } catch (e) { out = {ok: false, error: 'bad_response', detail: text.slice(0, 200)}; }
+    await ffNet(body.op, out.error === 'bad_response' ? 'bad_response' : '');
+    return out;
+  } catch (e) {
+    await ffNet(body.op, 'network: ' + String(e && e.message || e));
+    throw e;
   } finally {
     clearTimeout(t);
   }
@@ -62,7 +78,13 @@ async function ffGetApi(params, timeoutMs) {
     const url = FF_API_URL + '?' + ffQuery(Object.assign({}, params, {n: Date.now().toString(36)}));
     const res = await fetch(url, {method: 'GET', signal: ctrl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store'});
     const text = await res.text();
-    try { return JSON.parse(text); } catch (e) { return {ok: false, error: 'bad_response', detail: text.slice(0, 200)}; }
+    let out;
+    try { out = JSON.parse(text); } catch (e) { out = {ok: false, error: 'bad_response', detail: text.slice(0, 200)}; }
+    await ffNet(params.op, out.error === 'bad_response' ? 'bad_response' : '');
+    return out;
+  } catch (e) {
+    await ffNet(params.op, 'network: ' + String(e && e.message || e));
+    throw e;
   } finally {
     clearTimeout(t);
   }
@@ -102,11 +124,12 @@ function ffDayKey(iso) {
 }
 
 // A rejected attendance entry that can never go through from the phone: already recorded, or a mark-in for a day that is over.
-function ffDeadAtt(item) {
+function ffDeadAtt(item, sentLog) {
   if (item.type !== 'att' || !item.permanent) return false;
   if (/^att_exists/.test(item.lastError || '')) return true;
-  const pl = item.payload || {};
-  return pl.kind === 'IN' && ffDayKey(pl.event_time) < ffDayKey(new Date().toISOString());
+  const pl = item.payload || {}, day = ffDayKey(pl.event_time);
+  if (pl.kind === 'IN' && day < ffDayKey(new Date().toISOString())) return true;
+  return (sentLog || []).some(x => x.type === 'att' && x.att && x.att.kind === pl.kind && ffDayKey(x.att.event_time) === day && x.att.att_id !== pl.att_id);
 }
 
 async function ffSyncOutbox(onProgress) {
@@ -119,8 +142,9 @@ async function ffSyncOutbox(onProgress) {
     locked = await ffLock(true);
     if (!locked) return {busy: true};
     const items = (await ffOutboxAll()).sort((a, b) => a.created - b.created);
+    const sentBefore = (await ffGet('sentLog')) || [];
     for (const item of items) {
-      if (ffDeadAtt(item)) {
+      if (ffDeadAtt(item, sentBefore)) {
         await ffOutboxDelete(item.id);
         const dropped = (await ffGet('droppedLog')) || [];
         dropped.unshift({id: item.id, type: item.type, label: item.label || '', error: item.lastError || '', attempts: item.attempts || 0, payload: Object.assign({}, item.payload, {selfie: ''}), dropped_at: Date.now()});

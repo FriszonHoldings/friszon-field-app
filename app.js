@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.5';
+const APP_VERSION = '0.7.6';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -59,10 +59,16 @@ window.addEventListener('error', e => logClient('error', e.message, (e.error && 
 window.addEventListener('unhandledrejection', e => logClient('error', 'promise', String(e.reason && e.reason.stack || e.reason)));
 
 async function flushClientLog() {
-  const q = (await ffGet('clientLog')) || [];
-  if (!q.length || !S.session || !navigator.onLine) return;
-  const res = await ffApi(Object.assign({op: 'log', entries: q}, ffCred(S.session))).catch(() => null);
-  if (res && res.ok) await ffSet('clientLog', []);
+  if (flushClientLog.busy) return;
+  flushClientLog.busy = true;
+  try {
+    const q = (await ffGet('clientLog')) || [];
+    if (!q.length || !S.session || !navigator.onLine) return;
+    const res = await ffApi(Object.assign({op: 'log', entries: q}, ffCred(S.session))).catch(() => null);
+    if (res && res.ok) { const now = (await ffGet('clientLog')) || []; await ffSet('clientLog', now.slice(q.length)); }
+  } finally {
+    flushClientLog.busy = false;
+  }
 }
 
 async function init() {
@@ -83,7 +89,26 @@ async function init() {
   setInterval(() => { if (navigator.onLine) syncNow(); }, 60000);
 }
 
-async function refreshOutbox() { S.outbox = await ffOutboxAll(); S.sentLog = (await ffGet('sentLog')) || []; renderHeaderStatus(); if (S.view === 'sent') render(); }
+async function refreshOutbox() { S.outbox = await ffOutboxAll(); S.sentLog = (await ffGet('sentLog')) || []; S.lastContact = (await ffGet('lastContact')) || 0; renderHeaderStatus(); if (S.view === 'sent') render(); }
+
+// A short picture of the phone (what is waiting, what was sent, failed calls) goes to the office log whenever it changes, so problems can be seen without the phone in hand.
+async function reportState() {
+  try {
+    const net = (await ffGet('netLog')) || [];
+    const t = x => x ? new Date(x).toLocaleTimeString('en-IN', {hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'}) : '-';
+    const st = {v: APP_VERSION, view: S.view, online: navigator.onLine, contact: t(S.lastContact),
+      outbox: S.outbox.map(o => o.type + ':' + (o.payload && (o.payload.shop_id || o.payload.att_id || o.payload.prospect_id) || o.id) + ':' + (o.permanent ? 'rejected' : 'waiting') + ':' + (o.attempts || 0) + (o.lastError ? ':' + String(o.lastError).slice(0, 40) : '') + ':saved ' + t(o.created)),
+      sent: (S.sentLog || []).slice(0, 8).map(x => x.type + ':' + (x.shop_id || (x.att && x.att.kind) || '') + ':' + t(x.sent_at)),
+      failedCalls: net.filter(n => Date.now() - n.at < 6 * 3600000).slice(-8).map(n => t(n.at) + ' ' + n.op + ' ' + n.err)};
+    const key = JSON.stringify(Object.assign({}, st, {contact: ''}));
+    if (reportState.key === key && Date.now() - reportState.at < 30 * 60000) return;
+    const last = (await ffGet('lastState')) || {};
+    if (reportState.key === key || (last.key === key && Date.now() - (last.at || 0) < 30 * 60000)) { reportState.key = key; reportState.at = last.at || Date.now(); return; }
+    reportState.key = key; reportState.at = Date.now();
+    await ffSet('lastState', {key: key, at: reportState.at});
+    await logClient('state', 'phone', JSON.stringify(st).slice(0, 1800));
+  } catch (e) {}
+}
 
 async function syncNow() {
   if (!S.session) return;
@@ -93,6 +118,8 @@ async function syncNow() {
     await refreshOutbox();
   }
   if (!S.outbox.filter(x => !x.permanent).length && navigator.onLine && S.view !== 'visit') await pullData(false);
+  await refreshOutbox();
+  await reportState();
   flushClientLog();
   if ('serviceWorker' in navigator && S.outbox.some(x => !x.permanent)) {
     navigator.serviceWorker.ready.then(r => r.sync && r.sync.register('ff-outbox')).catch(() => {});
@@ -174,8 +201,13 @@ function renderHeaderStatus() {
   const el = document.getElementById('sync-status'); if (!el) return;
   const waiting = S.outbox.filter(x => !x.permanent).length;
   const stuck = S.outbox.filter(x => x.permanent).length;
-  el.className = 'status' + (stuck || S.authProblem ? ' err' : waiting ? ' wait' : '');
-  el.textContent = S.authProblem ? 'PIN problem – call Ashwin' : stuck ? stuck + ' need attention' : waiting ? waiting + ' waiting to send' : 'All sent ✓';
+  const quiet = S.session && S.lastContact && Date.now() - S.lastContact > 10 * 60000 ? new Date(S.lastContact).toLocaleTimeString('en-IN', {hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata'}) : '';
+  const parts = [];
+  if (waiting) parts.push(waiting + ' waiting to send');
+  if (stuck) parts.push(stuck + ' need attention');
+  if (quiet) parts.push('no internet since ' + quiet);
+  el.className = 'status' + (stuck || quiet || S.authProblem ? ' err' : waiting ? ' wait' : '');
+  el.textContent = S.authProblem ? 'PIN problem – call Ashwin' : parts.length ? parts.join(' · ') : 'All sent ✓';
 }
 
 function render() {
