@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.6';
+const APP_VERSION = '0.8.0';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -74,7 +74,7 @@ async function flushClientLog() {
 async function init() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(e => logClient('error', 'sw register', String(e)));
-    navigator.serviceWorker.addEventListener('message', ev => { if (ev.data && ev.data.type === 'synced') refreshOutbox(); });
+    navigator.serviceWorker.addEventListener('message', ev => { if (ev.data && ev.data.type === 'synced') refreshOutbox(); if (ev.data && ev.data.type === 'sync-now') syncNow(); });
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   S.session = await ffGet('session');
@@ -117,18 +117,21 @@ async function syncNow() {
     await ffSyncOutbox(() => refreshOutbox());
     await refreshOutbox();
   }
-  if (!S.outbox.filter(x => !x.permanent).length && navigator.onLine && S.view !== 'visit') await pullData(false);
+  if (S.view !== 'visit') await pullData(false);
   await refreshOutbox();
   await reportState();
   flushClientLog();
-  if ('serviceWorker' in navigator && S.outbox.some(x => !x.permanent)) {
-    navigator.serviceWorker.ready.then(r => r.sync && r.sync.register('ff-outbox')).catch(() => {});
-  }
 }
 
 let pullTry = 0, pullTimer = null;
 async function pullData(showToast) {
   if (!S.session) return;
+  if (pullData.busy && Date.now() - pullData.busy < 120000) return;
+  pullData.busy = Date.now();
+  try { await pullDataNow(showToast); } finally { pullData.busy = 0; }
+}
+
+async function pullDataNow(showToast) {
   if (!S.session.t) { await upgradeSession(); if (!S.session || !S.session.t) return; }
   clearTimeout(pullTimer);
   S.loading = true; pullTry++; if (!S.data) render();
@@ -252,7 +255,7 @@ function renderList(dueOnly) {
     return `<button class="shop" onclick="openVisit('${esc(r.shop_id)}')"><div class="name">${esc(r.shop_name)}</div><div class="meta">${esc(r.shop_id)} · ${r.t.last_visit ? 'last visit ' + (r.days === 0 ? 'today' : r.days + ' days ago') : 'never visited'}${r.t.amount_due ? ' · due ' + money(r.t.amount_due) : ''}</div><div class="meta">${esc(r.t.refill_plan || '')}</div>${chips}${done}</button>`;
   }).join('');
   return `${attCardHtml()}<input class="search" placeholder="Search shop" value="${esc(S.search)}" oninput="S.search=this.value;document.getElementById('list').innerHTML=renderListInner(${dueOnly})">
-    <div id="list" class="${attLocked() ? 'locked' : ''}">${list || `<div class="empty">${dueOnly ? 'No shops due. Well done.' : 'No shops.'}</div>`}</div>`;
+    <div id="list">${list || `<div class="empty">${dueOnly ? 'No shops due. Well done.' : 'No shops.'}</div>`}</div>`;
 }
 
 function renderListInner(dueOnly) { const tmp = document.createElement('div'); tmp.innerHTML = renderList(dueOnly); return tmp.querySelector('#list').innerHTML; }
@@ -549,7 +552,6 @@ function geoText() {
 }
 
 function openVisit(shopId) {
-  if (attLocked()) { toast(attLockMsg(), 4000); window.scrollTo(0, 0); return; }
   S.showAllMissing = false;
   const shop = S.data.shops.find(s => s.shop_id === shopId);
   S.form = {

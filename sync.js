@@ -95,28 +95,8 @@ function ffCred(session) {
 }
 
 let ffSyncing = false;
-const FF_LOCK_MS = 120000;
+let ffSyncStarted = 0;
 const FF_PERM_RETRY_MS = 30 * 60000;
-const ffLockId = Math.random().toString(36).slice(2);
-
-// One sender at a time across the page and the service worker, so the same item is never posted twice at once.
-async function ffLock(take) {
-  const db = await ffOpenDb();
-  return new Promise(resolve => {
-    let got = false;
-    const tx = db.transaction('kv', 'readwrite');
-    const st = tx.objectStore('kv');
-    const r = st.get('syncLock');
-    r.onsuccess = () => {
-      const cur = r.result, now = Date.now();
-      const free = !cur || cur.until < now || cur.by === ffLockId;
-      if (take && free) { st.put({by: ffLockId, until: now + FF_LOCK_MS}, 'syncLock'); got = true; }
-      if (!take && cur && cur.by === ffLockId) st.delete('syncLock');
-    };
-    tx.oncomplete = () => { db.close(); resolve(got); };
-    tx.onerror = tx.onabort = () => { db.close(); resolve(false); };
-  });
-}
 
 function ffDayKey(iso) {
   const d = new Date(new Date(iso).getTime() + 330 * 60000);
@@ -133,14 +113,13 @@ function ffDeadAtt(item, sentLog) {
 }
 
 async function ffSyncOutbox(onProgress) {
-  if (ffSyncing) return {busy: true};
+  if (ffSyncing && Date.now() - ffSyncStarted < 180000) return {busy: true};
   ffSyncing = true;
-  let sent = 0, failed = 0, locked = false;
+  ffSyncStarted = Date.now();
+  let sent = 0, failed = 0;
   try {
     const session = await ffGet('session');
     if (!session || !session.t) return {sent: 0, failed: 0};
-    locked = await ffLock(true);
-    if (!locked) return {busy: true};
     const items = (await ffOutboxAll()).sort((a, b) => a.created - b.created);
     const sentBefore = (await ffGet('sentLog')) || [];
     for (const item of items) {
@@ -153,7 +132,6 @@ async function ffSyncOutbox(onProgress) {
         continue;
       }
       if (item.permanent && Date.now() - (item.lastTry || 0) < FF_PERM_RETRY_MS) { failed++; continue; }
-      await ffLock(true);
       if (item.type === 'prospect' && item.payload.stage !== 'f1' && items.some(x => x.type === 'prospect' && x.permanent && x.payload.prospect_id === item.payload.prospect_id && x.id !== item.id)) {
         if (!item.permanent) { item.permanent = true; item.lastError = 'bad_prospect: Form 1 of this shop was rejected'; await ffOutboxPut(item); }
         failed++;
@@ -194,7 +172,6 @@ async function ffSyncOutbox(onProgress) {
       if (onProgress) onProgress();
     }
   } finally {
-    if (locked) await ffLock(false);
     ffSyncing = false;
   }
   return {sent: sent, failed: failed};

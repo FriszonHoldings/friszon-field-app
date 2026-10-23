@@ -341,7 +341,6 @@ function attMiss() {
   const outThere = (S.sentLog || []).some(x => x.type === 'att' && x.att && x.att.kind === 'OUT' && todayKey(x.att.event_time) === p.date) || S.outbox.some(o => o.type === 'att' && o.payload.kind === 'OUT' && todayKey(o.payload.event_time) === p.date);
   return outThere ? null : p;
 }
-function attLocked() { return !!S.data && attActive() && workdayToday() && ['working', 'out_rejected'].indexOf(attState().s) < 0; }
 function attLockMsg() {
   const s = attState().s;
   return s === 'none' ? 'Mark in first – tap Mark in at the top of Shops Due.' : s === 'in_pending' ? 'Your mark-in is waiting for Ashwin to approve.' : s === 'absent' ? 'Your mark-in was rejected. Today is marked absent.' : s === 'out_pending' ? 'Your early mark-out is waiting for Ashwin.' : 'You have marked out for today.';
@@ -355,7 +354,7 @@ function attMenuText() {
 }
 function attCardHtml() {
   if (!S.data) return '';
-  if (!attActive()) return `<div class="card att"><h2>New from ${new Date(ATT_FROM + 'T12:00:00+05:30').toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long'})}: Mark in and Mark out</h2><div class="small">Every working day (Monday to Saturday) mark in here before 10 am with a selfie, and mark out after 6 pm. Shop visits open only after you mark in. Marking in late or out early needs Ashwin's approval.</div></div>`;
+  if (!attActive()) return `<div class="card att"><h2>New from ${new Date(ATT_FROM + 'T12:00:00+05:30').toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long'})}: Mark in and Mark out</h2><div class="small">Every working day (Monday to Saturday) mark in here before 10 am with a selfie, and mark out after 6 pm. Marking in late or out early needs a reason for Ashwin.</div></div>`;
   if (!workdayToday()) return '';
   const st = attState(), m = istMin();
   const inT = st.inR ? hm(st.inR.event_time) : '';
@@ -364,18 +363,18 @@ function attCardHtml() {
   const miss = st.s === 'none' ? attMiss() : null;
   if (miss) {
     cls = 'stop';
-    h = `<h2>You did not mark out on ${esc(miss.label)}</h2><div class="small">Mark in and tell Ashwin why you did not mark out that day. Your shop visits open once he approves.${m >= ATT_IN_BY ? ' It is also past 10 am, so give that reason too.' : ''}</div><br><button class="btn" onclick="openAtt('IN')">Mark in – explain to Ashwin</button>`;
+    h = `<h2>You did not mark out on ${esc(miss.label)}</h2><div class="small">Mark in and tell Ashwin why you did not mark out that day. Your shop visits are open.${m >= ATT_IN_BY ? ' It is also past 10 am, so give that reason too.' : ''}</div><br><button class="btn" onclick="openAtt('IN')">Mark in – explain to Ashwin</button>`;
   } else if (st.s === 'none') {
-    h = m < ATT_IN_BY ? `<h2>Good morning</h2><div class="small">Mark in to start your day. Shop visits open after you mark in. Mark in before 10 am.</div><br><button class="btn" onclick="openAtt('IN')">Mark in</button>`
-      : `<h2>Not marked in</h2><div class="small">It is past 10 am. Ask Ashwin to approve a late mark-in. Shop visits stay locked until he approves.</div><br><button class="btn" onclick="openAtt('IN')">Ask to mark in late</button>`;
+    h = m < ATT_IN_BY ? `<h2>Good morning</h2><div class="small">Mark in to start your day, before 10 am.</div><br><button class="btn" onclick="openAtt('IN')">Mark in</button>`
+      : `<h2>Not marked in</h2><div class="small">It is past 10 am. Mark in now and give the reason for Ashwin. Your shop visits are open.</div><br><button class="btn" onclick="openAtt('IN')">Ask to mark in late</button>`;
     cls = m < ATT_IN_BY ? '' : 'stop';
-  } else if (st.s === 'in_pending') { cls = 'wait'; h = `<h2>Waiting for Ashwin</h2><div class="small">Your mark-in at ${inT}${q(st.inR)} needs his approval. Shop visits open as soon as he approves.</div><br><button class="btn small ghost" onclick="pullData(true)">Check now</button>`; }
-  else if (st.s === 'absent') { cls = 'stop'; h = `<h2>Mark-in rejected</h2><div class="small">Ashwin rejected your mark-in${attNote(st.inR)}. Today is marked absent. Call Ashwin if this is wrong.</div>`; }
+  } else if (st.s === 'in_pending') { cls = 'wait'; h = `<h2>Waiting for Ashwin</h2><div class="small">Your mark-in at ${inT}${q(st.inR)} is waiting for his approval. Carry on with your shop visits.</div><br><button class="btn small ghost" onclick="pullData(true)">Check now</button>${m >= ATT_OUT_FROM ? ` <button class="btn small ghost" onclick="openAtt('OUT')">Mark out</button>` : ''}`; }
+  else if (st.s === 'absent') { cls = 'stop'; h = `<h2>Mark-in rejected</h2><div class="small">Ashwin rejected your mark-in${attNote(st.inR)}. Call Ashwin if this is wrong.</div>${m >= ATT_OUT_FROM ? `<br><button class="btn small ghost" onclick="openAtt('OUT')">Mark out</button>` : ''}`; }
   else if (st.s === 'working' || st.s === 'out_rejected') {
     h = `<h2>Marked in at ${inT}${st.inR.status === 'Approved' ? ' (approved by Ashwin)' : ''}${q(st.inR)}</h2>`;
     if (st.s === 'out_rejected') h += `<div class="warn">Ashwin said no to marking out early${attNote(st.outR)}. Carry on, and mark out after 6 pm.</div>`;
     h += m >= ATT_OUT_FROM ? `<button class="btn ghost" onclick="openAtt('OUT')">Mark out</button>` : `<div class="small">Mark out opens at 6 pm.</div><br><button class="btn small ghost" onclick="openAtt('OUT')">Ask to mark out early</button>`;
-  } else if (st.s === 'out_pending') { cls = 'wait'; h = `<h2>Waiting for Ashwin</h2><div class="small">You asked to mark out early at ${hm(st.outR.event_time)}${q(st.outR)}. Shop visits are paused until he answers.</div><br><button class="btn small ghost" onclick="pullData(true)">Check now</button>`; }
+  } else if (st.s === 'out_pending') { cls = 'wait'; h = `<h2>Waiting for Ashwin</h2><div class="small">You asked to mark out early at ${hm(st.outR.event_time)}${q(st.outR)}. Carry on with your shop visits.</div><br><button class="btn small ghost" onclick="pullData(true)">Check now</button>`; }
   else if (st.s === 'out_done') h = `<h2>Day done ✓</h2><div class="small">In ${inT} · out ${hm(st.outR.event_time)}${st.outR.status === 'Approved' ? ' (early, approved)' : ''}${q(st.outR)}</div>`;
   if (st.failed) h += `<div class="err">Not accepted by the office: ${esc(st.failed.error)}. Call Ashwin.</div>`;
   return `<div class="card att ${cls}">${h}</div>`;
@@ -384,7 +383,7 @@ function openAtt(kind) {
   if (!attActive()) return;
   const st = attState();
   if (kind === 'IN' && st.s !== 'none') return;
-  if (kind === 'OUT' && ['working', 'out_rejected'].indexOf(st.s) < 0) { toast(attLockMsg()); return; }
+  if (kind === 'OUT' && (!st.inR || ['out_pending', 'out_done'].indexOf(st.s) > -1)) { toast(attLockMsg()); return; }
   S.showAllMissing = false;
   S.att = {att_id: 'AT' + uid(), kind: kind, selfie: '', reason: '', missed_reason: '', miss: kind === 'IN' ? attMiss() : null, opened: Date.now()};
   S.view = 'att'; startGeo(); render(); window.scrollTo(0, 0);
@@ -413,10 +412,10 @@ function renderAtt(keep) {
   const noGeoOk = !S.geo && !geoBlocked() && Date.now() - a.opened >= ATT_GEO_WAIT;
   const stamp = a.selfie && a.selfieAt && Date.now() - a.selfieAt < ATT_SELFIE_MAX ? `<div class="ok" style="text-align:center">Selfie taken at <b>${hm(new Date(a.selfieAt).toISOString())}</b> – this is your ${a.kind === 'IN' ? 'mark-in' : 'mark-out'} time.</div>` : '';
   let h = topBar(attTitle(), 'cancelAtt()') + `<main><div class="card"><div class="clock">${hm(new Date().toISOString())}</div><div class="small" style="text-align:center">${new Date().toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata'})}</div>${stamp}</div>`;
-  if (need) h += `<div class="warn">${a.kind === 'IN' ? 'It is past 10 am. Ashwin must approve this late mark-in. Your shop visits stay locked until he does.' : 'It is before 6 pm. Ashwin must approve this early mark-out. Your shop visits pause until he answers.'}</div>`;
+  if (need) h += `<div class="warn">${a.kind === 'IN' ? 'It is past 10 am. Give the reason – Ashwin will see it. Your shop visits stay open.' : 'It is before 6 pm. Give the reason – Ashwin will see it.'}</div>`;
   h += `<div class="card"><label class="field">Selfie (front camera, your face clearly visible)</label><div class="photo selfie">${a.selfie ? `<img src="${a.selfie}">` : ''}<button class="btn small ${a.selfie ? 'ghost' : ''}" onclick="attSelfie()">${a.selfie ? 'Retake selfie' : 'Take selfie'}</button></div>
     <div id="geo" class="small" style="margin-top:12px">${geoText()}</div>${noGeoOk ? '<div class="warn">No location yet. You can still save; Ashwin will see that location was missing.</div>' : ''}`;
-  if (a.miss) h += `<div class="err">You did not mark out on ${esc(a.miss.label)}. Ashwin must approve before your shop visits open today.</div><label class="field">Why did you not mark out on ${esc(a.miss.label)}?</label><textarea oninput="S.att.missed_reason=this.value;attMissing()">${esc(a.missed_reason)}</textarea>`;
+  if (a.miss) h += `<div class="err">You did not mark out on ${esc(a.miss.label)}. Tell Ashwin why below. Your shop visits stay open.</div><label class="field">Why did you not mark out on ${esc(a.miss.label)}?</label><textarea oninput="S.att.missed_reason=this.value;attMissing()">${esc(a.missed_reason)}</textarea>`;
   if (need) h += `<label class="field">Reason for ${a.kind === 'IN' ? 'marking in late' : 'marking out early'}</label><textarea oninput="S.att.reason=this.value;attMissing()">${esc(a.reason)}</textarea>`;
   h += `</div></main><div class="savebar"><div class="inner"><div class="missing" id="missing"></div><button class="btn" id="savebtn" onclick="saveAtt()">${attTitle()}</button></div></div>`;
   $app.innerHTML = h; renderHeaderStatus(); attMissing();

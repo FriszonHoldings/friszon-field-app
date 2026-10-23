@@ -1,4 +1,4 @@
-const CACHE = 'ff-shell-v22';
+const CACHE = 'ff-shell-v23';
 const SHELL = ['./', './index.html', './app.js', './screens2.js', './sync.js', './styles.css', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 importScripts('./sync.js');
@@ -24,5 +24,5 @@ self.addEventListener('fetch', e => {
 });
 
 self.addEventListener('sync', e => {
-  if (e.tag === 'ff-outbox') e.waitUntil(ffSyncOutbox().then(() => self.clients.matchAll().then(cs => cs.forEach(c => c.postMessage({type: 'synced'})))));
+  if (e.tag === 'ff-outbox') e.waitUntil(self.clients.matchAll().then(cs => cs.forEach(c => c.postMessage({type: 'sync-now'}))));
 });
