@@ -1,4 +1,4 @@
-const API_VERSION = '1.12.3';
+const API_VERSION = '1.13.0';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const API_URL_ = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
 const ADMIN_EMAIL_ = 'bujji.prabhu@gmail.com';
@@ -849,10 +849,10 @@ function saveAtt_(rep, a) {
   const late = base === 'Late' || base === 'Early';
   let reason = String(a.reason || '').trim();
   if (late && reason.length < 5 && used !== phoneTime) reason = 'No reason given – his phone clock was ' + Math.round(Math.abs(skew) / 60) + ' min ' + (skew > 0 ? 'slow' : 'fast') + ', so the app treated this as within time';
-  if (late && reason.length < 5) return {ok: false, error: 'bad_att', detail: 'reason needed for ' + (a.kind === 'IN' ? 'a late mark-in' : 'an early mark-out')};
+  if (late && reason.length < 5) reason = 'No reason given (the app did not ask – his phone may have had old data)';
   const miss = a.kind === 'IN' && workday ? attMissed_(table_(sh).rows, rep.email, p.date) : {missed: false};
-  const missReason = String(a.missed_reason || '').trim();
-  if (miss.missed && missReason.length < 5) return {ok: false, error: 'bad_att', detail: 'reason needed for the missed mark-out on ' + miss.label};
+  let missReason = String(a.missed_reason || '').trim();
+  if (miss.missed && missReason.length < 5) missReason = 'No reason given (the app did not ask – his phone may have had old data)';
   if (miss.missed) reason = 'No mark-out on ' + miss.label + ': ' + missReason + (late ? ' | Late: ' + reason : '');
   const rule = miss.missed ? (late ? 'Late, missed mark-out' : 'Missed mark-out') : base;
   const pending = late || miss.missed;
@@ -868,7 +868,6 @@ function saveAtt_(rep, a) {
     } else {
       const ins = day.filter(r => String(r.kind) === 'IN');
       if (!ins.length) return {ok: false, error: 'bad_att', detail: 'no mark-in on ' + p.date};
-      if (!ins.some(r => ['OK', 'Approved'].indexOf(String(r.status)) > -1)) return {ok: false, error: 'bad_att', detail: ins.some(r => String(r.status) === 'Pending') ? 'mark-in not approved yet' : 'mark-in was rejected'};
       if (day.some(r => String(r.kind) === 'OUT' && String(r.status) !== 'Rejected')) return {ok: false, error: 'att_exists', detail: 'already marked out on ' + p.date};
     }
     sh.appendRow(rowFor_(ensureCols_(sh, ATT_HEAD_), o));
@@ -902,7 +901,7 @@ function attNotify_(rep, o, selfie) {
       '<p><b>Time:</b> ' + htmlEsc_(when) + '<br><b>Reason:</b> ' + htmlEsc_(o.reason) + '<br><b>Location:</b> ' + (map ? '<a href="' + map + '">open map</a>' + (o.gps_accuracy ? ' (±' + htmlEsc_(o.gps_accuracy) + ' m)' : '') : 'not available') + '</p>' + skew +
       (m ? '<p><img src="cid:selfie" style="max-width:260px;border-radius:8px"></p>' : '') +
       '<p><a href="' + link + '" style="display:inline-block;background:#1b5e20;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Approve or reject</a></p>' +
-      '<p style="color:#666;font-size:13px">' + (o.kind === 'IN' ? 'His shop visits stay locked until you approve.' : 'His shop visits are locked while this waits. If you reject, he carries on until 6 pm.') + '</p></div>';
+      '<p style="color:#666;font-size:13px">' + (o.kind === 'IN' ? 'His shop visits are not held up – your answer is recorded against the day.' : 'His shop visits are not held up. If you reject, he is expected to work until 6 pm.') + '</p></div>';
     MailApp.sendEmail({to: ADMIN_EMAIL_, subject: (rep.test ? '[TEST] ' : '') + rep.name + ' – ' + what + ' request, ' + when, htmlBody: html, inlineImages: inline, name: 'Friszon Field'});
   } catch (err) {
     try { serverError_({op: 'att_mail', email: rep.email}, err); } catch (e2) {}
