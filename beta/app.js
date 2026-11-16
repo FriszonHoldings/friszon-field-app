@@ -1,4 +1,4 @@
-const APP_VERSION = '0.8.0-beta';
+const APP_VERSION = '0.8.1-beta';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -82,6 +82,12 @@ async function init() {
   await refreshOutbox();
   const draft = await ffGet('draft');
   if (draft && S.session) { S.form = draft; S.view = 'visit'; startGeo(); }
+  const attDraft = await ffGet('attDraft');
+  if (attDraft && S.session && !draft) {
+    const done = attDraft.day === todayKey() && S.outbox.concat(S.sentLog || []).some(x => x.type === 'att' && ((x.payload && x.payload.att_id) || (x.att && x.att.att_id)) === attDraft.att_id);
+    if (attDraft.day === todayKey() && !done) { S.att = Object.assign(attDraft, {restored: true, opened: Date.now()}); if (S.att.selfieAt && Date.now() - S.att.selfieAt >= ATT_SELFIE_MAX) { S.att.selfie = ''; S.att.selfieAt = 0; } S.view = 'att'; startGeo(); logClient('info', 'att', 'restored after reload | ' + attDraft.att_id); }
+    else await ffSet('attDraft', null);
+  }
   render();
   if (S.session) { syncNow(); }
   window.addEventListener('online', () => syncNow());
