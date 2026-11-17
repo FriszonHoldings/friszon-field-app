@@ -1,4 +1,4 @@
-const CACHE = 'ff-beta-v2';
+const CACHE = 'ff-beta-v3';
 const SHELL = ['./', './index.html', './app.js', './screens2.js', './sync.js', './styles.css', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 importScripts('./sync.js');

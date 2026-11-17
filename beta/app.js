@@ -1,4 +1,4 @@
-const APP_VERSION = '0.8.1-beta';
+const APP_VERSION = '0.8.2-beta';
 const DUE_DAYS = 10;
 const ACTIONS = ['Count only', 'Refilled', 'Payment collected', 'Payment due not collected', 'Monthly confirmation', 'Packs taken back'];
 const SLIP_ACTIONS = ['Refilled', 'Monthly confirmation', 'Packs taken back'];
@@ -21,7 +21,7 @@ function uid() { const a = new Uint8Array(4); crypto.getRandomValues(a); return 
 function todayKey(d) { const x = d ? new Date(d) : new Date(); return x.toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'}); }
 function daysSince(iso) { if (!iso) return Infinity; const a = new Date(todayKey() + 'T00:00:00+05:30'); const b = new Date(todayKey(iso) + 'T00:00:00+05:30'); return Math.round((a - b) / 86400000); }
 function money(n) { return '₹' + (Math.round(Number(n) * 100) / 100).toLocaleString('en-IN'); }
-const READY_SKUS = ['VATHAL', 'MOR', 'WSAMBAR', 'AVIAL'];
+const READY_SKUS = ['VATHAL', 'MOR', 'WSAMBAR', 'AVIAL', 'KING'];
 function productName(sku) {
   const p = (S.data && S.data.products || []).find(x => x.sku === sku);
   if (!p) return sku;

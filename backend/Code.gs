@@ -1,4 +1,4 @@
-const API_VERSION = '1.13.0';
+const API_VERSION = '1.13.1';
 const FIELD_ID = '1pwInjVDR229K2t6yY2uYpXnWzZtDN08zn2yAQAR5J10';
 const API_URL_ = 'https://script.google.com/macros/s/AKfycbytE1QRjXO9ZbLY5zU_6-0pNkrYB4fQxiqMdnY6pwcYxYkHZdKdHnt0b9yLDdgEpRh8Jg/exec';
 const ADMIN_EMAIL_ = 'bujji.prabhu@gmail.com';
@@ -304,7 +304,7 @@ function bootstrap_(rep) {
       last_visit: iso_(t.last_visit), flag: String(t.flag || '')
     }));
   const products = rowsOf('APP_Products')
-    .filter(p => String(p.active).toUpperCase().indexOf('Y') === 0 || p.active === true)
+    .filter(p => String(p.active).toUpperCase().indexOf('Y') === 0 || p.active === true || (rep.test && String(p.active).toUpperCase() === 'TEST'))
     .map(p => ({sku: String(p.sku), name: String(p.name), pack: String(p.pack || '')}));
   const invoices = rowsOf('APP_Invoices')
     .filter(i => myShopIds[String(i.shop_id)] && ['Open', 'Awaiting approval'].indexOf(String(i.status)) > -1)
