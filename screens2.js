@@ -385,7 +385,9 @@ function openAtt(kind) {
   if (kind === 'IN' && st.s !== 'none') return;
   if (kind === 'OUT' && (!st.inR || ['out_pending', 'out_done'].indexOf(st.s) > -1)) { toast(attLockMsg()); return; }
   S.showAllMissing = false;
-  S.att = {att_id: 'AT' + uid(), kind: kind, selfie: '', reason: '', missed_reason: '', miss: kind === 'IN' ? attMiss() : null, opened: Date.now()};
+  S.att = {att_id: 'AT' + uid(), kind: kind, selfie: '', reason: '', missed_reason: '', miss: kind === 'IN' ? attMiss() : null, opened: Date.now(), day: todayKey(), camFails: 0};
+  attStep('opened ' + kind);
+  attKeep();
   S.view = 'att'; startGeo(); render(); window.scrollTo(0, 0);
   clearInterval(attTick); attTick = setInterval(() => { if (S.view === 'att' && S.att) renderAtt(true); else clearInterval(attTick); }, 15000);
 }
@@ -402,33 +404,84 @@ function attValidate() {
   return m;
 }
 function attMissing() { const el = document.getElementById('missing'); if (!el) return; const m = attValidate(); el.innerHTML = missingHtml(m, 'attMissing'); document.getElementById('savebtn').textContent = m.length ? 'Save (' + m.length + ' to fill)' : attNeedReason() || S.att.miss ? 'Send request to Ashwin' : attTitle(); }
+// Every step of a mark-in/out goes to the office log, so a mark-in that never arrives can be traced.
+function attStep(what) { logClient('info', 'att', what + (S.att ? ' | ' + S.att.att_id : '')); }
+// The mark-in screen is kept on the phone while it is being filled, so if Chrome reloads the page (for example while the camera is open) nothing is lost.
+let attKeepTimer = null;
+function attKeep() { clearTimeout(attKeepTimer); attKeepTimer = setTimeout(() => { if (S.att) ffSet('attDraft', S.att).catch(() => {}); }, 200); }
 function attSelfie() {
+  attStep('selfie tapped');
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !S.att.usePhoneCam) return attCamOpen();
+  attPhoneCam();
+}
+function attPhoneCam() {
+  attKeep();
   const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.capture = 'user';
-  input.onchange = async () => { const file = input.files && input.files[0]; if (!file) return; try { S.att.selfie = await compress(file); S.att.selfieAt = Date.now(); renderAtt(true); } catch (e) { logClient('error', 'selfie', String(e)); toast('Photo failed. Try again.'); } };
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) { S.att.camFails = (S.att.camFails || 0) + 1; S.att.camMsg = 'The camera did not send a photo back. Try again. If it keeps happening, free up storage on the phone.'; attStep('phone camera returned no photo'); attKeep(); renderAtt(true); return; }
+    try { S.att.selfie = await compress(file); S.att.selfieAt = Date.now(); S.att.camMsg = ''; attStep('selfie ok (phone camera) ' + Math.round(S.att.selfie.length / 1024) + ' KB'); attKeep(); renderAtt(true); }
+    catch (e) { S.att.camFails = (S.att.camFails || 0) + 1; S.att.camMsg = 'The photo could not be read. Try again.'; attStep('selfie error ' + String(e)); attKeep(); renderAtt(true); }
+  };
   input.click();
 }
+let attStream = null;
+async function attCamOpen() {
+  const box = document.createElement('div');
+  box.id = 'camBox';
+  box.style.cssText = 'position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px';
+  box.innerHTML = '<video id="camVid" autoplay playsinline muted style="width:100%;max-width:420px;border-radius:12px;transform:scaleX(-1)"></video><div class="small" id="camMsg" style="color:#fff;text-align:center">Starting camera…</div><div style="display:flex;gap:10px"><button class="btn" id="camShot" disabled>Take selfie</button><button class="btn ghost" onclick="attCamClose()">Cancel</button></div><button class="btn small ghost" style="color:#fff;border-color:#888" onclick="attCamClose();S.att.usePhoneCam=true;attPhoneCam()">Use the phone camera instead</button>';
+  document.body.appendChild(box);
+  try {
+    attStream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'user', width: {ideal: 960}, height: {ideal: 1280}}, audio: false});
+    const v = document.getElementById('camVid'); if (!v) { attCamStop(); return; }
+    v.srcObject = attStream;
+    document.getElementById('camMsg').textContent = 'Keep your face in the picture and tap Take selfie.';
+    const shot = document.getElementById('camShot'); shot.disabled = false;
+    shot.onclick = () => {
+      const w = v.videoWidth, h = v.videoHeight;
+      if (!w || !h) { document.getElementById('camMsg').textContent = 'Camera not ready yet – try again in a second.'; return; }
+      const max = 1280, k = Math.min(1, max / Math.max(w, h));
+      const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k);
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+      S.att.selfie = c.toDataURL('image/jpeg', 0.72); S.att.selfieAt = Date.now(); S.att.camMsg = '';
+      attStep('selfie ok (in-app camera) ' + Math.round(S.att.selfie.length / 1024) + ' KB');
+      attCamClose(); attKeep(); renderAtt(true);
+    };
+    attStep('in-app camera started');
+  } catch (e) {
+    attStep('in-app camera failed: ' + (e && e.name) + ' ' + (e && e.message || ''));
+    attCamClose(); S.att.usePhoneCam = true; attPhoneCam();
+  }
+}
+function attCamStop() { if (attStream) { attStream.getTracks().forEach(t => t.stop()); attStream = null; } }
+function attCamClose() { attCamStop(); const b = document.getElementById('camBox'); if (b) b.remove(); }
 function renderAtt(keep) {
   const y = window.scrollY, a = S.att, need = attNeedReason();
   const noGeoOk = !S.geo && !geoBlocked() && Date.now() - a.opened >= ATT_GEO_WAIT;
   const stamp = a.selfie && a.selfieAt && Date.now() - a.selfieAt < ATT_SELFIE_MAX ? `<div class="ok" style="text-align:center">Selfie taken at <b>${hm(new Date(a.selfieAt).toISOString())}</b> – this is your ${a.kind === 'IN' ? 'mark-in' : 'mark-out'} time.</div>` : '';
   let h = topBar(attTitle(), 'cancelAtt()') + `<main><div class="card"><div class="clock">${hm(new Date().toISOString())}</div><div class="small" style="text-align:center">${new Date().toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata'})}</div>${stamp}</div>`;
   if (need) h += `<div class="warn">${a.kind === 'IN' ? 'It is past 10 am. Give the reason – Ashwin will see it. Your shop visits stay open.' : 'It is before 6 pm. Give the reason – Ashwin will see it.'}</div>`;
+  if (a.restored) h += `<div class="warn">Your ${a.kind === 'IN' ? 'mark-in' : 'mark-out'} was interrupted (the phone closed the app). What you typed is kept${a.selfie ? '' : ' – take the selfie again'} and press the button at the bottom to send it.</div>`;
+  if (a.camMsg) h += `<div class="err">${esc(a.camMsg)}</div>`;
   h += `<div class="card"><label class="field">Selfie (front camera, your face clearly visible)</label><div class="photo selfie">${a.selfie ? `<img src="${a.selfie}">` : ''}<button class="btn small ${a.selfie ? 'ghost' : ''}" onclick="attSelfie()">${a.selfie ? 'Retake selfie' : 'Take selfie'}</button></div>
     <div id="geo" class="small" style="margin-top:12px">${geoText()}</div>${noGeoOk ? '<div class="warn">No location yet. You can still save; Ashwin will see that location was missing.</div>' : ''}`;
-  if (a.miss) h += `<div class="err">You did not mark out on ${esc(a.miss.label)}. Tell Ashwin why below. Your shop visits stay open.</div><label class="field">Why did you not mark out on ${esc(a.miss.label)}?</label><textarea oninput="S.att.missed_reason=this.value;attMissing()">${esc(a.missed_reason)}</textarea>`;
-  if (need) h += `<label class="field">Reason for ${a.kind === 'IN' ? 'marking in late' : 'marking out early'}</label><textarea oninput="S.att.reason=this.value;attMissing()">${esc(a.reason)}</textarea>`;
+  if (a.miss) h += `<div class="err">You did not mark out on ${esc(a.miss.label)}. Tell Ashwin why below. Your shop visits stay open.</div><label class="field">Why did you not mark out on ${esc(a.miss.label)}?</label><textarea oninput="S.att.missed_reason=this.value;attKeep();attMissing()">${esc(a.missed_reason)}</textarea>`;
+  if (need) h += `<label class="field">Reason for ${a.kind === 'IN' ? 'marking in late' : 'marking out early'}</label><textarea oninput="S.att.reason=this.value;attKeep();attMissing()">${esc(a.reason)}</textarea>`;
   h += `</div></main><div class="savebar"><div class="inner"><div class="missing" id="missing"></div><button class="btn" id="savebtn" onclick="saveAtt()">${attTitle()}</button></div></div>`;
   $app.innerHTML = h; renderHeaderStatus(); attMissing();
   if (keep) window.scrollTo(0, y);
 }
-function cancelAtt() { stopGeo(); clearInterval(attTick); S.att = null; go('due'); }
+function cancelAtt() { attStep('cancelled'); attCamClose(); clearTimeout(attKeepTimer); ffSet('attDraft', null).catch(() => {}); stopGeo(); clearInterval(attTick); S.att = null; go('due'); }
 async function saveAtt() {
   const m = attValidate();
-  if (m.length) { S.showAllMissing = true; renderAtt(true); toast('Fill the items listed in red first'); return; }
+  if (m.length) { attStep('save pressed, missing: ' + m.join('; ')); S.showAllMissing = true; renderAtt(true); toast('Fill the items listed in red first'); return; }
   const a = S.att, g = S.geo, need = attNeedReason(), at = attAt().toISOString();
   const payload = {att_id: a.att_id, kind: a.kind, event_time: at, selfie: a.selfie, gps: g ? g.lat.toFixed(6) + ', ' + g.lng.toFixed(6) : '', gps_accuracy: g ? g.accuracy : '', reason: need ? String(a.reason).trim() : '', missed_reason: a.miss ? String(a.missed_reason).trim() : '', app_version: APP_VERSION};
   const label = (a.kind === 'IN' ? (need ? 'Late mark-in request' : a.miss ? 'Mark-in request' : 'Mark in') : (need ? 'Early mark-out request' : 'Mark out')) + ' ' + hm(at);
   await ffOutboxPut({id: a.att_id, type: 'att', payload: payload, created: Date.now(), label: label});
+  attStep('saved on phone ' + a.kind + ' ' + at);
+  clearTimeout(attKeepTimer); await ffSet('attDraft', null);
   stopGeo(); clearInterval(attTick); S.att = null;
   await refreshOutbox();
   S.view = 'due'; render(); window.scrollTo(0, 0);
